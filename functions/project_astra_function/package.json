@@ -1,0 +1,9 @@
+{
+	"name": "project_astra_function",
+	"version": "1.0.0",
+	"main": "index.js",
+	"author": "faiz",
+	"dependencies": {
+		"zcatalyst-sdk-node": "latest"
+	}
+}

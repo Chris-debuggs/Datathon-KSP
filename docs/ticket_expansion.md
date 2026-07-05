@@ -7,11 +7,18 @@
 **Context:**
 We must establish the foundational repository structure using the Zoho Catalyst CLI. To prevent deployment failures and CI/CD bloat, the frontend (Slate) and backend (Advanced I/O) must be strictly isolated.
 **Implementation Steps:**
-Install Catalyst CLI globally: npm install -g zcatalyst-cli.Run catalyst init and select Client (Slate) and Functions (Advanced I/O - Node.js 24).Create a master .gitignore at the repository root.Add /node_modules/, .env, and .catalystrc to the .gitignore.
+- Install Catalyst CLI globally: `npm install -g zcatalyst-cli`.
+- Run `catalyst init` and select Client (Slate) and Functions (Advanced I/O - Node.js 24).
+- Create a master `.gitignore` at the repository root.
+- Add `/node_modules/`, `.env`, and `.catalystrc` to the `.gitignore`.
+
 **Technical Guardrails:**
 ⚠️ DO NOT run npm install at the repository root. Catalyst requires dependencies to be installed inside specific function directories (e.g., backend/functions/api_handler).
+
 **Acceptance Criteria:**
-- [ ] Catalyst project initialized successfully.- [ ] Directory structure isolates frontend and backend.- [ ] .gitignore prevents node_modules from being committed.
+- [ ] Catalyst project initialized successfully.
+- [ ] Directory structure isolates frontend and backend.
+- [ ] `.gitignore` prevents node_modules from being committed.
 ### Ticket 1.2: Generate Synthetic Crime Dataset
 **Context:**
 We need 150,000+ relational records to prove the platform works at scale. Because ZCQL limits deep joins, we must also generate a flat ZCQL_Edges table to map relationships (e.g., Accused to CaseMaster) ahead of time.

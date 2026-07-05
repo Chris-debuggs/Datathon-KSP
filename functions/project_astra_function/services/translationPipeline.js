@@ -3,29 +3,35 @@
 const { performance } = require('perf_hooks');
 
 // ---------------------------------------------------------------------------
-// QuickML Endpoint Keys (replace with actual keys from Catalyst Console)
+// QuickML Endpoint Keys (obtained dynamically from process.env)
 // ---------------------------------------------------------------------------
-const STT_ENDPOINT_KEY = 'REPLACE_WITH_STT_ENDPOINT_KEY';
-const TRANSLATE_ENDPOINT_KEY = 'REPLACE_WITH_TRANSLATE_ENDPOINT_KEY';
-const TTS_ENDPOINT_KEY = 'REPLACE_WITH_TTS_ENDPOINT_KEY';
+const STT_ENDPOINT_KEY = process.env.QUICKML_STT_ENDPOINT_KEY;
+const TRANSLATE_ENDPOINT_KEY = process.env.QUICKML_TRANSLATE_ENDPOINT_KEY;
+const TTS_ENDPOINT_KEY = process.env.QUICKML_TTS_ENDPOINT_KEY;
 
 /**
- * Processes a Kannada audio buffer through a 5-stage multilingual pipeline:
- *   1. Speech-to-Text   (Kannada audio → Kannada text)
+ * Processes a Kannada audio buffer through a 5-stage multilingual pipeline.
+ * Currently, the pipeline topology is: Kannada -> English -> English:
+ *   1. Speech-to-Text (Kannada audio -> Kannada text)
  *   2. Start latency timer
- *   3. Translation       (Kannada text  → English text)
+ *   3. Translation (Kannada text -> English text)
  *   4. End latency timer & log
- *   5. Text-to-Speech    (English text  → English audio)
+ *   5. Text-to-Speech (English text -> English audio)
  *
  * @param {import('zcatalyst-sdk-node').CatalystApp} catalystApp - Initialized Catalyst app instance.
  * @param {Buffer} audioBuffer - Raw audio bytes of the Kannada speech input.
  * @returns {Promise<{ englishAudioBuffer: Buffer, englishText: string, latencyMs: number }>}
  */
 async function processAudioPipeline(catalystApp, audioBuffer) {
+  const connectionName = process.env.QUICKML_CONNECTION_NAME;
+  if (!connectionName) {
+    throw new Error('QUICKML_CONNECTION_NAME environment variable is not defined.');
+  }
+
   // ── Authenticate the QuickML OAuth connection ──────────────────────────
   await catalystApp
     .connection()
-    .getConnectionCredentials('quickml_connection');
+    .getConnectionCredentials(connectionName);
 
   const quickMl = catalystApp.quickMl();
 
@@ -40,7 +46,7 @@ async function processAudioPipeline(catalystApp, audioBuffer) {
       ? sttResponse.result[0]
       : sttResponse.result;
 
-  console.log('[Pipeline] STT complete — Kannada text:', kannadaText);
+  console.log('[Pipeline] STT complete — Kannada text length:', String(kannadaText).length);
 
   // ── Step 2 — Start latency timer ──────────────────────────────────────
   const translateStart = performance.now();
@@ -60,11 +66,11 @@ async function processAudioPipeline(catalystApp, audioBuffer) {
 
   const englishText =
     Array.isArray(translateResponse.result) &&
-    translateResponse.result.length > 0
+      translateResponse.result.length > 0
       ? translateResponse.result[0]
       : translateResponse.result;
 
-  console.log('[Pipeline] Translation complete — English text:', englishText);
+  console.log('[Pipeline] Translation complete — English text length:', String(englishText).length);
 
   // ── Step 5 — Text-to-Speech (English) ─────────────────────────────────
   const ttsResponse = await quickMl.predict(TTS_ENDPOINT_KEY, {
