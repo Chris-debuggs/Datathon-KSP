@@ -1,0 +1,20 @@
+--- DEBUG START ---
+2026-07-06T07:00:54.934Z - Requiring runtime-store... 
+2026-07-06T07:00:55.002Z - Requiring fn-utils... 
+2026-07-06T07:00:56.816Z - Initializing Config... 
+2026-07-06T07:00:56.820Z - Initializing Authentication... 
+2026-07-06T07:00:56.823Z - Initializing RC... 
+2026-07-06T07:00:56.854Z - Config loaded successfully. 
+2026-07-06T07:00:56.869Z - Auth helper called successfully. 
+2026-07-06T07:00:57.280Z - RC helper called successfully. 
+2026-07-06T07:00:57.282Z - Running target validation... 
+2026-07-06T07:00:57.285Z - Raw targets found: [
+  "c:\\Users\\Faiz\\Downloads\\Faiz-projects\\KSP-Datathon\\Datathon-KSP\\functions\\project_astra_function"
+]
+2026-07-06T07:00:57.403Z - Refined targets results: 
+2026-07-06T07:00:57.404Z - - Target: project_astra_function {
+  "valid": true,
+  "type": "aio",
+  "stack": "node24"
+}
+2026-07-06T07:00:57.405Z - Run finished. 

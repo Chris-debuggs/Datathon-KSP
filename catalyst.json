@@ -1,0 +1,8 @@
+{
+    "functions": {
+        "source": "functions",
+        "targets": [
+            "project_astra_function"
+        ]
+    }
+}

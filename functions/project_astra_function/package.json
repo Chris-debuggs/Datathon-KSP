@@ -4,6 +4,7 @@
 	"main": "index.js",
 	"author": "faiz",
 	"dependencies": {
+		"dotenv": "^17.4.2",
 		"zcatalyst-sdk-node": "latest"
 	}
 }

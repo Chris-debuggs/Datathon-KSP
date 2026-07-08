@@ -30,10 +30,10 @@ async function processAudioPipeline(catalystApp, audioBuffer) {
 
   // ── Authenticate the QuickML OAuth connection ──────────────────────────
   await catalystApp
-    .connection()
+    .connections()
     .getConnectionCredentials(connectionName);
 
-  const quickMl = catalystApp.quickMl();
+  const quickMl = catalystApp.quickML();
 
   // ── Step 1 — Speech-to-Text (Kannada) ─────────────────────────────────
   const sttResponse = await quickMl.predict(STT_ENDPOINT_KEY, {
