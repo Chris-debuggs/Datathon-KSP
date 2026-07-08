@@ -4,6 +4,7 @@
 	"main": "index.js",
 	"author": "Chris Nevin K Dence",
 	"dependencies": {
-		"zcatalyst-sdk-node": "latest"
+		"zcatalyst-sdk-node": "latest",
+		"express": "^4.19.2"
 	}
 }

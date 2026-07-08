@@ -4,3 +4,5 @@ node_modules/
 .catalystrc
 .DS_Store
 dataset_csvs/
+.build/
+catalyst-debug.log
