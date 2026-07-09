@@ -1,15 +1,16 @@
 --- Direct Request Sandbox ---
 Requesting URL: "https://api.catalyst.zoho.in/baas/v1/project/56021000000017001/connection-details?connection-link-name=quickml_connection"
-Status Code: 200
+Status Code: 400
 Response Headers: {
   "server": "ZGS",
-  "date": "Mon, 06 Jul 2026 07:11:23 GMT",
-  "content-type": "application/vnd.catalyst.v2+json",
-  "transfer-encoding": "chunked",
+  "date": "Thu, 09 Jul 2026 18:55:45 GMT",
+  "content-type": "text/html;charset=utf-8",
+  "content-length": "435",
   "connection": "keep-alive",
   "set-cookie": [
-    "zalb_3a750b85f1=8388f4f8025eeef201d9f585929091e6; Path=/; Secure; HttpOnly",
-    "ZD_CSRF_TOKEN=ee51b1e5-4f81-4021-809f-ea63dda71fd9;path=/;SameSite=None;Secure;priority=high"
+    "zalb_3a750b85f1=468562ac077082277b24f938a14b8a11; Path=/; Secure; HttpOnly",
+    "ZD_CSRF_TOKEN=cf81e739-3e31-4690-8354-743adaa87bf6;path=/;SameSite=None;Secure;priority=high",
+    "JSESSIONID=5572E4EA3BF5ED3B3034320AA7240B62; Path=/; Secure; HttpOnly"
   ],
   "x-content-type-options": "nosniff",
   "content-security-policy-report-only": "default-src 'none'; script-src https://static.localzohocdn.com https://localjs.zohostatic.com https://desk.zoho.com/portal/api/web/inapp/588736000002017355; style-src 'unsafe-inline' https://localcss.zohostatic.com https://static.localzohocdn.com https://localjs.zohostatic.com; font-src data: https://static.localzohocdn.com https://webfonts.zohowebstatic.com https://localcss.zohostatic.com https://fonts.gstatic.com/s/opensans/; img-src blob: data: https://localimg.zohostatic.com https://desk.zoho.com/portal/api/publicImages/588736000002017391 https://localcss.zohostatic.com https://accounts.zoho.com/static/showcaptcha https://forums.catalyst.zoho.com/portal/api/ https://static.localzohocdn.com https://*.catalyst.zoho.in/favicon.ico https://contacts.localzoho.com/file; connect-src 'self' https://desk.zoho.com/api/v1/public/im/efc https://desk.zoho.com/portal/api/ https://localjs.zohostatic.com https://static.localzohocdn.com https://localimg.zohostatic.com https://*.zoho.in; frame-src 'self' https://tipengine.zoho.com/; report-uri https://logsapi.zoho.in/csplog?service=ZohoCatalyst",
@@ -17,6 +18,7 @@ Response Headers: {
   "pragma": "no-cache",
   "expires": "Thu, 01 Jan 1970 00:00:00 GMT",
   "x-frame-options": "DENY",
+  "content-language": "en",
   "strict-transport-security": "max-age=64072000; includeSubDomains; preload"
 }
-Response Body: "{\"status\":\"success\",\"data\":{\"headers\":{\"Authorization\":\"Zoho-oauthtoken 1000.7844bcd3987b73064b14bf4f9a393e83.bbe047ac399845d29c2442f5fa34f8ff\"},\"parameters\":{}}}"
+Response Body: "<!doctype html><html lang=\"en\"><head><title>HTTP Status 400 – Bad Request</title><style type=\"text/css\">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;} h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;} .line {height:1px;background-color:#525D76;border:none;}</style></head><body><h1>HTTP Status 400 – Bad Request</h1></body></html>"

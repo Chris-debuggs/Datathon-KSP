@@ -9,9 +9,10 @@ try {
     const cliJson = require('c:/Users/Faiz/AppData/Roaming/zcatalyst-cli-nodejs/Config/zcatalyst-cli.json');
     const decrypted = new Crypt('ZC_TRAM').decrypt(cliJson.in.credential);
 
+    const projectId = process.env.QUICKML_PROJECT_ID || '56021000000017001';
     process.env.CATALYST_CONFIG = JSON.stringify({
-        project_id: '56021000000017001',
-        project_key: '56021000000017001',
+        project_id: projectId,
+        project_key: projectId,
         environment: 'Development'
     });
     process.env.CATALYST_AUTH = JSON.stringify({
