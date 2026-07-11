@@ -10,16 +10,10 @@
     "source": "react-app",
     "plugin": "zcatalyst-cli-plugin-react"
   },
-  "appsail": [
-    {
-      "source": "appsail-nodejs",
-      "name": "AppSail"
-    }
-  ],
   "slate": [
     {
       "name": "react-vite",
-      "source": "C:\\Users\\cnevi\\Documents\\Datathon KSP\\react-vite"
+      "source": "client"
     }
   ]
 }
