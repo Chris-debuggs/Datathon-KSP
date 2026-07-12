@@ -3,6 +3,45 @@
 const catalyst = require('zcatalyst-sdk-node');
 const { processAudioPipeline } = require('./services/translationPipeline');
 
+function rewriteLegalQuery(userQuery) {
+	if (!userQuery) return "";
+	let optimized = userQuery;
+	
+	optimized = optimized.replace(/electronic FIR/gi, "information relating to a cognizable offence given by electronic communication");
+	optimized = optimized.replace(/First Information Report/gi, "information relating to the commission of a cognizable offence under Section 173");
+	optimized = optimized.replace(/\bFIR\b/gi, "information relating to the commission of a cognizable offence under Section 173");
+	optimized = optimized.replace(/\barrest\b/gi, "arrest of persons under Section 35");
+	
+	return optimized;
+}
+
+async function refreshZohoToken() {
+	const url = "https://accounts.zoho.in/oauth/v2/token";
+	const params = new URLSearchParams();
+	params.append('grant_type', 'refresh_token');
+	params.append('client_id', '1000.235IDXWAW9GEUZXQSGZY834T88Y6YP');
+	params.append('client_secret', '319b6e6c1b105a713a93075a1897f09b867a7c6162');
+	params.append('refresh_token', process.env.QUICKML_REFRESH_TOKEN);
+
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+		body: params.toString()
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to refresh token: ${await response.text()}`);
+	}
+
+	const data = await response.json();
+	if (data.access_token) {
+		process.env.QUICKML_OAUTH_TOKEN = data.access_token;
+		return data.access_token;
+	} else {
+		throw new Error('Refresh response missing access_token');
+	}
+}
+
 /**
  * Catalyst Serverless Advanced I/O Function Handler
  *
@@ -175,6 +214,83 @@ module.exports = async (req, res) => {
 			console.error(err);
 			res.writeHead(500, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({ status: 'error', message: err.message }));
+		}
+	} else if (url.includes('/api/ask-legal') && method === 'POST') {
+		try {
+			let body = [];
+			req.on('data', chunk => body.push(chunk));
+			req.on('end', async () => {
+				try {
+					const buffer = Buffer.concat(body);
+					let reqBody;
+					try {
+						reqBody = JSON.parse(buffer.toString());
+					} catch(e) {
+						res.writeHead(400, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON payload' }));
+						return;
+					}
+					
+					const userQuestion = reqBody.question;
+					if (!userQuestion) {
+						res.writeHead(400, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ status: 'error', message: 'Missing question property in request' }));
+						return;
+					}
+
+					const optimizedQuery = rewriteLegalQuery(userQuestion);
+
+					const ragUrl = process.env.QUICKML_RAG_ENDPOINT;
+					const payload = JSON.stringify({
+						"query": optimizedQuery,
+						"documents": [ process.env.QUICKML_DOC_ID ]
+					});
+
+					let ragResponse = await fetch(ragUrl, {
+						method: 'POST',
+						headers: {
+							"Content-Type": "application/json",
+							"CATALYST-ORG": process.env.CATALYST_ORG_ID,
+							"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
+						},
+						body: payload
+					});
+
+					if (ragResponse.status === 401) {
+						await refreshZohoToken();
+						ragResponse = await fetch(ragUrl, {
+							method: 'POST',
+							headers: {
+								"Content-Type": "application/json",
+								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
+								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
+							},
+							body: payload
+						});
+					}
+
+					const ragText = await ragResponse.text();
+					if (!ragResponse.ok) {
+						throw new Error(`RAG API Failed: ${ragText}`);
+					}
+					
+					const ragData = JSON.parse(ragText);
+					const aiAnswer = ragData.response || "I cannot answer this based on the current legal documentation provided.";
+
+					res.end(JSON.stringify({
+						status: 'success',
+						answer: aiAnswer
+					}));
+				} catch (err) {
+					console.error("[DEBUG] Route crashed:", err.message);
+					res.writeHead(500, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: "Our legal AI is currently overwhelmed, please try again in a moment." }));
+				}
+			});
+		} catch (err) {
+			console.error("[DEBUG] Route setup crashed:", err.message);
+			res.writeHead(500, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ error: "Our legal AI is currently overwhelmed, please try again in a moment." }));
 		}
 	} else {
 		res.writeHead(404, { 'Content-Type': 'application/json' });
