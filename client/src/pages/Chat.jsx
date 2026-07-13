@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Navbar from '../components/Navbar';
+import ExportReport from '../components/ExportReport';
+import { apiFetch, isRateLimitError, SYSTEM_BUSY_MESSAGE } from '../utils/apiFetch';
 
 // ─── Base URL for Catalyst Advanced I/O ────────────────────────────────────
 const BASE_URL = 'http://localhost:3000/server/ksp_datathon_function';
@@ -10,6 +12,12 @@ const mockConversationHistory = [
   { id: 2, title: 'Vehicle theft Whitefield', time: 'Yesterday' },
   { id: 3, title: 'Cyber scam — Case #3105', time: '3 days ago' },
 ];
+
+// ─── Get current time for message timestamp ─────────────────────────────────
+const getTimestamp = () => {
+  const now = new Date();
+  return now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+};
 
 // ─── Mock chat API ──────────────────────────────────────────────────────────
 // Matches mockApiService.sendChatMessage exactly
@@ -52,41 +60,51 @@ const pollJobStatus = (jobId, attempt = 1, onComplete, onError) => {
     return;
   }
 
-  // delay per attempt:
-  // attempt 1 → 2000ms
-  // attempt 2 → 3000ms
-  // attempt 3 → 4500ms
-  // attempt 4 → 6750ms
-  // attempt 5 → 10125ms
-  // attempt 6 → 15187ms
-  // attempt 7 → 22781ms
   const delay = 2000 * Math.pow(1.5, attempt - 1);
 
   setTimeout(async () => {
     try {
-      const res = await fetch(`${BASE_URL}/api/status/${jobId}`);
-      const data = await res.json();
+      // Ticket 4.2: use apiFetch wrapper → catches 429/504 automatically
+      const data = await apiFetch(`${BASE_URL}/api/status/${jobId}`);
 
       if (data.status === 'complete') {
-        // Fetch Stratus JSON from result_url → pass to D3 graph (ticket 3.4)
-        const graphRes = await fetch(data.result_url);
-        const graphData = await graphRes.json();
+        const graphData = await apiFetch(data.result_url);
         onComplete(graphData);
       } else {
-        // Still running → next attempt
         pollJobStatus(jobId, attempt + 1, onComplete, onError);
       }
     } catch (err) {
-      onError('Polling failed. Please try again.');
+      // Ticket 4.2: rate limit during polling → handled gracefully
+      if (isRateLimitError(err)) {
+        onError(SYSTEM_BUSY_MESSAGE);
+      } else {
+        onError('Polling failed. Please try again.');
+      }
     }
   }, delay);
+};
+
+// ─── Animated loading dots ──────────────────────────────────────────────────
+const LoadingDots = () => {
+  const [dots, setDots] = useState(1);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots(d => d === 3 ? 1 : d + 1);
+    }, 400);
+    return () => clearInterval(interval);
+  }, []);
+  return (
+    <span style={{ letterSpacing: '2px', color: '#C0392B', fontWeight: '700' }}>
+      {'●'.repeat(dots)}{'○'.repeat(3 - dots)}
+    </span>
+  );
 };
 
 // ─── Chat Component ─────────────────────────────────────────────────────────
 const Chat = () => {
 
   // Ticket 2.4: conversation state as array of message objects
-  // Each message: { role: 'user'|'assistant', content, source_nodes?, session_id? }
+  // Each message: { role, content, source_nodes?, session_id?, timestamp }
   const [contextHistory, setContextHistory] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -94,12 +112,15 @@ const Chat = () => {
   const [streamedText, setStreamedText] = useState('');
   const [systemBusy, setSystemBusy] = useState(false);
   const [activeConv, setActiveConv] = useState(1);
+  const [copiedIndex, setCopiedIndex] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
 
   // Ticket 2.6: async graph polling states
   const [isPolling, setIsPolling] = useState(false);
   const [pollingMessage, setPollingMessage] = useState('');
 
   const messagesEndRef = useRef(null);
+  const messagesAreaRef = useRef(null); // Ticket 4.1: ref for PDF capture
 
   // Auto scroll to latest message
   useEffect(() => {
@@ -119,6 +140,20 @@ const Chat = () => {
     return fullText;
   };
 
+  // ─── Copy AI response to clipboard ───────────────────────────────────────
+  const handleCopy = (text, index) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    });
+  };
+
+  // ─── Mic button toggle ────────────────────────────────────────────────────
+  const handleMic = () => {
+    setIsRecording(prev => !prev);
+    // TODO: connect to QuickML STT when ticket 2.2 is ready
+  };
+
   // ─── Ticket 2.6: Start polling after async graph job triggered ────────────
   const handleAsyncJob = (jobId) => {
     setIsPolling(true);
@@ -127,7 +162,6 @@ const Chat = () => {
     pollJobStatus(
       jobId,
       1,
-      // onComplete: Stratus JSON fetched → pass nodes+edges to D3 (ticket 3.4)
       (graphData) => {
         setIsPolling(false);
         setPollingMessage('');
@@ -135,7 +169,6 @@ const Chat = () => {
         console.log('Graph nodes:', graphData.nodes);
         console.log('Graph edges:', graphData.edges);
       },
-      // onError: polling timed out or failed
       (errMsg) => {
         setIsPolling(false);
         setPollingMessage('');
@@ -152,42 +185,34 @@ const Chat = () => {
     setInputValue('');
     setSystemBusy(false);
 
-    // Append user message to context_history array
     const updatedHistory = [
       ...contextHistory,
-      { role: 'user', content: userMessage },
+      { role: 'user', content: userMessage, timestamp: getTimestamp() },
     ];
     setContextHistory(updatedHistory);
     setIsLoading(true);
 
     try {
-      // Ticket 2.4: POST /api/chat with message + full context_history
-      // TODO: swap with real fetch() when Chris confirms /api/chat endpoint:
-      // const res = await fetch(`${BASE_URL}/api/chat`, {
+      // TODO: swap mock with real apiFetch() when Chris confirms /api/chat endpoint:
+      // const data = await apiFetch(`${BASE_URL}/api/chat`, {
       //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     message: userMessage,
-      //     history: updatedHistory,
-      //   })
+      //   body: JSON.stringify({ message: userMessage, history: updatedHistory })
       // });
-      // if (res.status === 429 || res.status === 504) throw { status: res.status };
-      // const data = await res.json();
+      // apiFetch handles 429/504 automatically via ticket 4.2 wrapper!
       const data = await mockSendChatMessage(userMessage, updatedHistory);
 
       setIsLoading(false);
 
-      // Ticket 2.6: if response has job_id → async graph job was triggered
+      // Ticket 2.6: if response has job_id → async graph job triggered
       if (data.job_id) {
         handleAsyncJob(data.job_id);
         return;
       }
 
-      // Normal response → stream word by word
+      // Stream response word by word
       // Note: field is "response" per mockApiService.js (not "message"!)
       await streamText(data.response);
 
-      // Append AI response to context_history with source_nodes
       setContextHistory(prev => [
         ...prev,
         {
@@ -195,20 +220,21 @@ const Chat = () => {
           content: data.response,
           source_nodes: data.source_nodes || [],
           session_id: data.session_id,
+          timestamp: getTimestamp(),
         },
       ]);
       setStreamedText('');
 
     } catch (err) {
       setIsLoading(false);
-      // Ticket 4.2: catch HTTP 429 (rate limit) and 504 (timeout)
-      if (err?.status === 429 || err?.status === 504) {
+      // Ticket 4.2: catch HTTP 429 and 504 via apiFetch wrapper
+      // App stays stable — just shows system busy banner
+      if (isRateLimitError(err)) {
         setSystemBusy(true);
       }
     }
   };
 
-  // Enter key sends message (Shift+Enter = new line)
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -217,7 +243,6 @@ const Chat = () => {
   };
 
   // ─── Format XAI source tag label ─────────────────────────────────────────
-  // Matches source_nodes structure from mockApiService.js
   const getTagLabel = (node) => {
     if (node.CrimeNo) return node.CrimeNo;
     if (node.AccusedMasterID) return `ACC-${node.AccusedMasterID}`;
@@ -226,6 +251,8 @@ const Chat = () => {
   };
 
   const isBusy = isLoading || isStreaming || isPolling;
+  const charCount = inputValue.length;
+  const charLimit = 500;
 
   // ─── Styles ───────────────────────────────────────────────────────────────
   const s = {
@@ -267,6 +294,11 @@ const Chat = () => {
     sidebarTime: {
       fontSize: '11px', color: 'rgba(255,255,255,0.4)',
     },
+    sidebarEmpty: {
+      fontSize: '12px', color: 'rgba(255,255,255,0.3)',
+      textAlign: 'center', marginTop: '20px',
+      lineHeight: '1.5',
+    },
     newChatBtn: {
       width: '100%', marginTop: '14px', padding: '10px',
       background: '#E8C547', color: '#1A3A5C',
@@ -274,7 +306,7 @@ const Chat = () => {
       fontSize: '13px', fontWeight: '700', cursor: 'pointer',
     },
 
-    // Main chat area
+    // Chat main
     chatMain: {
       flex: 1, display: 'flex',
       flexDirection: 'column', background: '#F5F0E8',
@@ -283,7 +315,7 @@ const Chat = () => {
       flex: 1, padding: '24px', overflowY: 'auto',
     },
 
-    // Intro box
+    // Intro
     intro: {
       background: '#fff',
       border: '1px solid #E2D5C3',
@@ -303,8 +335,9 @@ const Chat = () => {
     },
 
     // Officer message
-    officerMsg: {
-      display: 'flex', justifyContent: 'flex-end', marginBottom: '16px',
+    officerMsgWrap: {
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'flex-end', marginBottom: '16px',
     },
     officerBubble: {
       background: '#6B3A2A', color: '#fff',
@@ -312,9 +345,13 @@ const Chat = () => {
       padding: '12px 16px', maxWidth: '480px',
       fontSize: '14px', lineHeight: '1.5',
     },
+    timestamp: {
+      fontSize: '10px', color: '#A0896B',
+      marginTop: '4px',
+    },
 
     // AI message
-    aiMsg: {
+    aiMsgWrap: {
       maxWidth: '680px', marginBottom: '16px',
     },
     aiBubble: {
@@ -325,11 +362,16 @@ const Chat = () => {
       padding: '14px 16px',
       fontSize: '14px', color: '#1A3A5C', lineHeight: '1.6',
     },
+    aiFooter: {
+      display: 'flex', alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: '6px',
+    },
 
-    // XAI source tags
+    // XAI tags
     xaiRow: {
       display: 'flex', gap: '6px',
-      marginTop: '8px', flexWrap: 'wrap', alignItems: 'center',
+      flexWrap: 'wrap', alignItems: 'center',
     },
     xaiTag: {
       fontSize: '11px', fontWeight: '600',
@@ -346,6 +388,15 @@ const Chat = () => {
       fontSize: '11px', color: '#A0896B',
     },
 
+    // Copy button
+    copyBtn: (copied) => ({
+      fontSize: '11px', fontWeight: '600',
+      color: copied ? '#1A7A4A' : '#A0896B',
+      background: 'none', border: 'none',
+      cursor: 'pointer', padding: '2px 6px',
+      borderRadius: '4px',
+    }),
+
     // Loading bubble
     loadingBubble: {
       background: '#fff',
@@ -353,12 +404,12 @@ const Chat = () => {
       borderLeft: '4px solid #C0392B',
       borderRadius: '2px 14px 14px 14px',
       padding: '14px 16px',
-      fontSize: '14px', color: '#94A3B8',
+      fontSize: '14px', color: '#1A3A5C',
       maxWidth: '680px', marginBottom: '16px',
-      display: 'flex', alignItems: 'center', gap: '8px',
+      display: 'flex', alignItems: 'center', gap: '10px',
     },
 
-    // Ticket 2.6: polling banner
+    // Polling banner
     pollingBanner: {
       background: '#EBF2FA',
       border: '1px solid #1A3A5C',
@@ -371,7 +422,7 @@ const Chat = () => {
       display: 'flex', alignItems: 'center', gap: '10px',
     },
 
-    // Ticket 4.2: system busy banner
+    // System busy banner
     systemBusyBanner: {
       background: '#FEF3CD',
       border: '1px solid #E8C547',
@@ -387,7 +438,10 @@ const Chat = () => {
     inputBar: {
       background: '#fff',
       borderTop: '2px solid #E2D5C3',
-      padding: '14px 20px',
+      padding: '12px 20px',
+      display: 'flex', flexDirection: 'column', gap: '8px',
+    },
+    inputRow: {
       display: 'flex', alignItems: 'center', gap: '10px',
     },
     input: {
@@ -396,12 +450,23 @@ const Chat = () => {
       borderRadius: '8px', fontSize: '14px',
       color: '#1A3A5C', outline: 'none', background: '#FDFAF6',
     },
-    micBtn: {
+    inputMeta: {
+      display: 'flex', justifyContent: 'flex-end',
+      alignItems: 'center',
+    },
+    charCount: (over) => ({
+      fontSize: '11px',
+      color: over ? '#C0392B' : '#A0896B',
+      fontWeight: over ? '600' : '400',
+    }),
+    micBtn: (recording) => ({
       width: '40px', height: '40px', borderRadius: '50%',
-      border: '1.5px solid #E2D5C3', background: '#FDFAF6',
+      border: `1.5px solid ${recording ? '#C0392B' : '#E2D5C3'}`,
+      background: recording ? '#FDECEA' : '#FDFAF6',
       cursor: 'pointer', display: 'flex',
       alignItems: 'center', justifyContent: 'center', fontSize: '17px',
-    },
+      transition: 'all 0.2s',
+    }),
     sendBtn: (disabled) => ({
       width: '40px', height: '40px', borderRadius: '50%',
       border: 'none',
@@ -409,10 +474,10 @@ const Chat = () => {
       cursor: disabled ? 'not-allowed' : 'pointer',
       display: 'flex', alignItems: 'center',
       justifyContent: 'center', color: '#fff', fontSize: '15px',
+      transition: 'background 0.2s',
     }),
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div style={s.page}>
       <Navbar />
@@ -422,16 +487,22 @@ const Chat = () => {
         {/* ── Sidebar ── */}
         <div style={s.sidebar}>
           <span style={s.sidebarLabel}>Recent Conversations</span>
-          {mockConversationHistory.map(item => (
-            <div
-              key={item.id}
-              style={s.sidebarItem(item.id === activeConv)}
-              onClick={() => setActiveConv(item.id)}
-            >
-              <div style={s.sidebarTitle}>{item.title}</div>
-              <div style={s.sidebarTime}>{item.time}</div>
-            </div>
-          ))}
+
+          {mockConversationHistory.length === 0 ? (
+            <p style={s.sidebarEmpty}>No previous investigations</p>
+          ) : (
+            mockConversationHistory.map(item => (
+              <div
+                key={item.id}
+                style={s.sidebarItem(item.id === activeConv)}
+                onClick={() => setActiveConv(item.id)}
+              >
+                <div style={s.sidebarTitle}>{item.title}</div>
+                <div style={s.sidebarTime}>{item.time}</div>
+              </div>
+            ))
+          )}
+
           <button
             style={s.newChatBtn}
             onClick={() => {
@@ -447,14 +518,30 @@ const Chat = () => {
 
         {/* ── Chat Main ── */}
         <div style={s.chatMain}>
-          <div style={s.messages}>
+
+          {/* Ticket 4.1: Export button bar */}
+          {contextHistory.length > 0 && (
+            <div style={{
+              padding: '8px 20px',
+              background: '#fff',
+              borderBottom: '1px solid #E2D5C3',
+              display: 'flex',
+              justifyContent: 'flex-end',
+            }}>
+              <ExportReport
+                targetRef={messagesAreaRef}
+                filename="ASTRA_Investigation_Report"
+                label="Export Report"
+              />
+            </div>
+          )}
+
+          <div ref={messagesAreaRef} style={s.messages}>
 
             {/* Intro — only when no messages yet */}
             {contextHistory.length === 0 && !isLoading && (
               <div style={s.intro}>
-                <div style={s.introTitle}>
-                  ASTRA Investigation Assistant
-                </div>
+                <div style={s.introTitle}>ASTRA Investigation Assistant</div>
                 <div style={s.introText}>
                   Good morning, XYZ. How can I assist your investigation today?
                   Ask me about FIRs, suspects, vehicles, UPI transactions,
@@ -463,10 +550,10 @@ const Chat = () => {
               </div>
             )}
 
-            {/* Ticket 4.2: System Busy Banner */}
+            {/* Ticket 4.2: System Busy Banner — exact message per spec */}
             {systemBusy && (
               <div style={s.systemBusyBanner}>
-                ⚠️ System Busy — Re-routing Intel. Please try again in 30 seconds.
+                ⚠️ {SYSTEM_BUSY_MESSAGE}
               </div>
             )}
 
@@ -475,53 +562,73 @@ const Chat = () => {
               <div key={index}>
                 {msg.role === 'user' ? (
 
-                  // Officer message bubble
-                  <div style={s.officerMsg}>
+                  // Officer message
+                  <div style={s.officerMsgWrap}>
                     <div style={s.officerBubble}>
                       {msg.content}
                     </div>
+                    {msg.timestamp && (
+                      <span style={s.timestamp}>{msg.timestamp}</span>
+                    )}
                   </div>
 
                 ) : (
 
-                  // AI message bubble with XAI source tags
-                  <div style={s.aiMsg}>
+                  // AI message with XAI tags + copy button
+                  <div style={s.aiMsgWrap}>
                     <div style={s.aiBubble}>
                       {msg.content}
                     </div>
 
-                    {/* XAI source_nodes — matches mockApiService.js structure */}
-                    {msg.source_nodes && msg.source_nodes.length > 0 && (
-                      <div style={s.xaiRow}>
-                        {msg.source_nodes.map((node, i) => (
-                          <span key={i} style={s.xaiTag}>
-                            {getTagLabel(node)}
-                            {node.confidence_score && (
-                              <span style={s.xaiConfidence(node.confidence_score)}>
-                                {' '}·{' '}{Math.round(node.confidence_score * 100)}%
-                              </span>
-                            )}
-                          </span>
-                        ))}
-                        <span style={s.xaiLabel}>· Sources</span>
+                    <div style={s.aiFooter}>
+                      {/* XAI source tags */}
+                      {msg.source_nodes && msg.source_nodes.length > 0 ? (
+                        <div style={s.xaiRow}>
+                          {msg.source_nodes.map((node, i) => (
+                            <span key={i} style={s.xaiTag}>
+                              {getTagLabel(node)}
+                              {node.confidence_score && (
+                                <span style={s.xaiConfidence(node.confidence_score)}>
+                                  {' '}·{' '}{Math.round(node.confidence_score * 100)}%
+                                </span>
+                              )}
+                            </span>
+                          ))}
+                          <span style={s.xaiLabel}>· Sources</span>
+                        </div>
+                      ) : <div />}
+
+                      {/* Timestamp + copy button */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {msg.timestamp && (
+                          <span style={s.timestamp}>{msg.timestamp}</span>
+                        )}
+                        <button
+                          style={s.copyBtn(copiedIndex === index)}
+                          onClick={() => handleCopy(msg.content, index)}
+                        >
+                          {copiedIndex === index ? '✓ Copied' : '⎘ Copy'}
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 )}
               </div>
             ))}
 
-            {/* Loading state — "ASTRA is thinking..." */}
+            {/* Loading state with animated dots */}
             {isLoading && (
               <div style={s.loadingBubble}>
-                <span>ASTRA is thinking</span>
-                <span>•••</span>
+                <span style={{ fontSize: '13px', color: '#6B3A2A' }}>
+                  ASTRA is thinking
+                </span>
+                <LoadingDots />
               </div>
             )}
 
-            {/* Streaming text — word by word with cursor */}
+            {/* Streaming text word by word */}
             {isStreaming && streamedText && (
-              <div style={s.aiMsg}>
+              <div style={s.aiMsgWrap}>
                 <div style={s.aiBubble}>
                   {streamedText}
                   <span style={{ opacity: 0.4 }}>▌</span>
@@ -537,29 +644,43 @@ const Chat = () => {
               </div>
             )}
 
-            {/* Auto scroll anchor */}
             <div ref={messagesEndRef} />
           </div>
 
           {/* ── Input Bar ── */}
           <div style={s.inputBar}>
-            <input
-              style={s.input}
-              type="text"
-              placeholder="Ask about a case, suspect, vehicle, UPI ID..."
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isBusy}
-            />
-            <button style={s.micBtn}>🎤</button>
-            <button
-              style={s.sendBtn(isBusy || !inputValue.trim())}
-              onClick={handleSend}
-              disabled={isBusy || !inputValue.trim()}
-            >
-              ➤
-            </button>
+            <div style={s.inputRow}>
+              <input
+                style={s.input}
+                type="text"
+                placeholder="Ask about a case, suspect, vehicle, UPI ID..."
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value.slice(0, charLimit))}
+                onKeyDown={handleKeyDown}
+                disabled={isBusy}
+              />
+              <button
+                style={s.micBtn(isRecording)}
+                onClick={handleMic}
+                title={isRecording ? 'Stop recording' : 'Start voice input'}
+              >
+                {isRecording ? '⏹️' : '🎤'}
+              </button>
+              <button
+                style={s.sendBtn(isBusy || !inputValue.trim())}
+                onClick={handleSend}
+                disabled={isBusy || !inputValue.trim()}
+              >
+                ➤
+              </button>
+            </div>
+
+            {/* Character count */}
+            <div style={s.inputMeta}>
+              <span style={s.charCount(charCount > charLimit * 0.9)}>
+                {charCount}/{charLimit}
+              </span>
+            </div>
           </div>
         </div>
       </div>
