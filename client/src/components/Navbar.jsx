@@ -8,6 +8,7 @@ const Navbar = ({ activePage }) => {
     { label: 'Chat', path: '/chat' },
     { label: 'Search', path: '/search' },
     { label: 'Analytics', path: '/analytics' },
+    { label: 'Graph', path: '/graph' },
   ];
 
   const styles = {
