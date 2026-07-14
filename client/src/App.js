@@ -5,7 +5,7 @@ import Chat from './pages/Chat';
 import Analytics from './pages/Analytics';
 import Search from './pages/Search';
 import Graph from './pages/Graph';
-
+import FIRDetail from './pages/FIRDetail';
 
 function App() {
   return (
@@ -17,6 +17,7 @@ function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/search" element={<Search />} />
         <Route path="/graph" element={<Graph />} />
+        <Route path="/fir/:id" element={<FIRDetail />} />
       </Routes>
     </BrowserRouter>
   );

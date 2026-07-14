@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import * as d3 from 'd3';
 import Navbar from '../components/Navbar';
-
-// ─── Base URL ───────────────────────────────────────────────────────────────
-const BASE_URL = 'http://localhost:3000/server/ksp_datathon_function';
 
 // ─── Mock graph data (matches mockApiService.pollJobStatus exactly) ─────────
 const mockGraphData = {
@@ -47,11 +45,14 @@ const truncate = (str, max = 16) =>
 const Graph = ({ graphData = null }) => {
     const svgRef = useRef(null);
     const simRef = useRef(null);
+    const navigate = useNavigate();
+    const location = useLocation();
     const [selectedNode, setSelectedNode] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
-    const [hoveredId, setHoveredId] = useState(null);
 
-    const data = graphData || mockGraphData;
+    // Use real data from Chat polling via location.state
+    // Falls back to mockGraphData if no real data
+    const data = location.state?.graphData || graphData || mockGraphData;
 
     // ─── Build D3 graph ───────────────────────────────────────────────────────
     useEffect(() => {
@@ -236,6 +237,7 @@ const Graph = ({ graphData = null }) => {
         // ── Hover highlight ─────────────────────────────────────────────────────
         node
             .on('mouseover', function (event, d) {
+                // eslint-disable-next-line no-unused-vars
                 const config = getConfig(d.type);
                 d3.select(this).select('circle, rect')
                     .attr('stroke', '#E8C547')
@@ -587,7 +589,12 @@ const Graph = ({ graphData = null }) => {
                                 <div style={s.divider} />
 
                                 {selectedNode.type === 'CaseMaster' && (
-                                    <button style={s.viewBtn}>View Full FIR</button>
+                                    <button
+                                        style={s.viewBtn}
+                                        onClick={() => navigate(`/fir/${selectedNode.metadata?.CrimeNo || selectedNode.id}`)}
+                                    >
+                                        View Full FIR
+                                    </button>
                                 )}
                                 <button
                                     style={s.closeBtn}
