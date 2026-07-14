@@ -1,4 +1,5 @@
 'use strict';
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
 const catalyst = require('zcatalyst-sdk-node');
 const { processAudioPipeline } = require('./services/translationPipeline');
@@ -291,6 +292,130 @@ module.exports = async (req, res) => {
 			console.error("[DEBUG] Route setup crashed:", err.message);
 			res.writeHead(500, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({ error: "Our legal AI is currently overwhelmed, please try again in a moment." }));
+		}
+	} else if (url.includes('/api/plan') && method === 'POST') {
+		try {
+			let body = [];
+			req.on('data', chunk => body.push(chunk));
+			req.on('end', async () => {
+				try {
+					const buffer = Buffer.concat(body);
+					let reqBody;
+					try {
+						reqBody = JSON.parse(buffer.toString());
+					} catch(e) {
+						res.writeHead(400, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON payload' }));
+						return;
+					}
+					
+					const userQuery = reqBody.query;
+					if (!userQuery) {
+						res.writeHead(400, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ status: 'error', message: 'Missing query property in request' }));
+						return;
+					}
+
+					const glmUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+					const payload = {
+						model: "crm-di-glm47b_30b_it",
+						messages: [
+							{
+								role: "system",
+								content:
+									"You are a law enforcement Planner Agent. " +
+									"Your ONLY function is to output a single raw JSON object. " +
+									"Do NOT think out loud. Do NOT number steps. Do NOT use bullets. " +
+									"Output ONLY the JSON object and nothing else."
+							},
+							{
+								role: "user",
+								content:
+									"Convert this query to a raw JSON object ONLY (no explanation, no markdown, no steps):\n\n" +
+									`Query: ${userQuery}\n\n` +
+									"Required JSON schema — output this object and NOTHING else:\n" +
+									"{\n" +
+									"  \"intent\": \"search\",\n" +
+									"  \"category\": \"cyber_fraud\",\n" +
+									"  \"keywords\": [\"extracted\", \"terms\"],\n" +
+									"  \"entities\": {\n" +
+									"    \"locations\": [\"Bengaluru\"],\n" +
+									"    \"technologies\": [\"UPI\"]\n" +
+									"  }\n" +
+									"}\n\n" +
+									"Your entire response = one JSON object. Start your response with { and end with }."
+							}
+						],
+						max_tokens: 2048,
+						temperature: 0.1,
+						stream: false
+					};
+
+					const glmResponse = await fetch(glmUrl, {
+						method: 'POST',
+						headers: {
+							"Content-Type": "application/json",
+							"CATALYST-ORG": "60076561329",
+							"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_DEPLOYMENT_TOKEN}`
+						},
+						body: JSON.stringify(payload)
+					});
+
+					const rawText = await glmResponse.text();
+					if (!glmResponse.ok) {
+						throw new Error(`GLM API Failed: ${rawText}`);
+					}
+
+					const apiData = JSON.parse(rawText);
+					const modelText =
+						apiData?.choices?.[0]?.message?.content ??
+						apiData?.output ??
+						apiData?.result ??
+						apiData?.response ??
+						null;
+
+					if (!modelText) {
+						throw new Error("Could not extract model text from envelope.");
+					}
+
+					// Deterministic parsing: split off the reasoning trace
+					const jsonString = modelText.split('</think>').pop().trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+					const plan = JSON.parse(jsonString);
+
+					res.writeHead(200, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({
+						status: 'success',
+						plan: plan
+					}));
+
+				} catch (err) {
+					console.error("[DEBUG] /api/plan error:", err.message);
+					res.writeHead(500, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({
+						status: 'error',
+						message: "Planner Agent failed. Using fallback.",
+						plan: {
+							intent: "unknown",
+							category: "unknown",
+							keywords: [],
+							entities: { locations: [], technologies: [] }
+						}
+					}));
+				}
+			});
+		} catch (err) {
+			console.error("[DEBUG] /api/plan setup crashed:", err.message);
+			res.writeHead(500, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				status: 'error',
+				message: "Planner Agent setup failed.",
+				plan: {
+					intent: "unknown",
+					category: "unknown",
+					keywords: [],
+					entities: { locations: [], technologies: [] }
+				}
+			}));
 		}
 	} else {
 		res.writeHead(404, { 'Content-Type': 'application/json' });
