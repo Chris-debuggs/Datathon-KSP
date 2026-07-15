@@ -7,12 +7,12 @@ const { processAudioPipeline } = require('./services/translationPipeline');
 function rewriteLegalQuery(userQuery) {
 	if (!userQuery) return "";
 	let optimized = userQuery;
-	
+
 	optimized = optimized.replace(/electronic FIR/gi, "information relating to a cognizable offence given by electronic communication");
 	optimized = optimized.replace(/First Information Report/gi, "information relating to the commission of a cognizable offence under Section 173");
 	optimized = optimized.replace(/\bFIR\b/gi, "information relating to the commission of a cognizable offence under Section 173");
 	optimized = optimized.replace(/\barrest\b/gi, "arrest of persons under Section 35");
-	
+
 	return optimized;
 }
 
@@ -53,10 +53,10 @@ module.exports = async (req, res) => {
 	let catalystApp;
 	try {
 		catalystApp = catalyst.initialize(req);
-	} catch(e) {
+	} catch (e) {
 		try {
 			catalystApp = catalyst.app();
-		} catch(err) {
+		} catch (err) {
 			catalystApp = catalyst.initializeApp();
 		}
 	}
@@ -95,7 +95,7 @@ module.exports = async (req, res) => {
 						res.end(JSON.stringify({ status: 'error', message: 'Invalid audio payload' }));
 						return;
 					}
-					
+
 					const result = await processAudioPipeline(catalystApp, buffer);
 					res.end(JSON.stringify({
 						status: 'success',
@@ -121,7 +121,7 @@ module.exports = async (req, res) => {
 			const cliJson = require('c:/Users/Faiz/AppData/Roaming/zcatalyst-cli-nodejs/Config/zcatalyst-cli.json');
 			const decrypted = new Crypt('ZC_TRAM').decrypt(cliJson.in.credential);
 			const token = decrypted.access_token;
-			
+
 			const projectId = '56021000000017001';
 			const orgId = '60076543810';
 			const connectionName = 'quickml_connection';
@@ -166,7 +166,7 @@ module.exports = async (req, res) => {
 						}
 					})
 				});
-				
+
 				const translateText = await translateResponse.text();
 				if (!translateResponse.ok) throw new Error(`Translate API Failed: ${translateText}`);
 				const translateData = JSON.parse(translateText);
@@ -195,13 +195,13 @@ module.exports = async (req, res) => {
 				if (!ttsResponse.ok) throw new Error(`TTS API Failed: ${ttsText}`);
 				const ttsData = JSON.parse(ttsText);
 				ttsBuffer = Buffer.from(ttsData.data || ttsData.result || '', 'base64');
-			} catch(e) {
+			} catch (e) {
 				console.log("[DEBUG] API fetch failed, using fallback mock for local testing. Error:", e.message);
 				translatedText = "Hello, how does this pipeline work? (Mocked)";
 				// 44-byte empty WAV header
-				ttsBuffer = Buffer.from([0x52,0x49,0x46,0x46, 0x24,0x00,0x00,0x00, 0x57,0x41,0x56,0x45, 0x66,0x6d,0x74,0x20, 0x10,0x00,0x00,0x00, 0x01,0x00,0x01,0x00, 0x44,0xac,0x00,0x00, 0x88,0x58,0x01,0x00, 0x02,0x00,0x10,0x00, 0x64,0x61,0x74,0x61, 0x00,0x00,0x00,0x00]);
+				ttsBuffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x44, 0xac, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00]);
 			}
-			
+
 			const path = require('path');
 			const outputPath = path.join(__dirname, '../../proof_output.wav');
 			fs.writeFileSync(outputPath, ttsBuffer);
@@ -226,12 +226,12 @@ module.exports = async (req, res) => {
 					let reqBody;
 					try {
 						reqBody = JSON.parse(buffer.toString());
-					} catch(e) {
+					} catch (e) {
 						res.writeHead(400, { 'Content-Type': 'application/json' });
 						res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON payload' }));
 						return;
 					}
-					
+
 					const userQuestion = reqBody.question;
 					if (!userQuestion) {
 						res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -244,7 +244,7 @@ module.exports = async (req, res) => {
 					const ragUrl = process.env.QUICKML_RAG_ENDPOINT;
 					const payload = JSON.stringify({
 						"query": optimizedQuery,
-						"documents": [ process.env.QUICKML_DOC_ID ]
+						"documents": [process.env.QUICKML_DOC_ID]
 					});
 
 					let ragResponse = await fetch(ragUrl, {
@@ -274,7 +274,7 @@ module.exports = async (req, res) => {
 					if (!ragResponse.ok) {
 						throw new Error(`RAG API Failed: ${ragText}`);
 					}
-					
+
 					const ragData = JSON.parse(ragText);
 					const aiAnswer = ragData.response || "I cannot answer this based on the current legal documentation provided.";
 
@@ -303,12 +303,12 @@ module.exports = async (req, res) => {
 					let reqBody;
 					try {
 						reqBody = JSON.parse(buffer.toString());
-					} catch(e) {
+					} catch (e) {
 						res.writeHead(400, { 'Content-Type': 'application/json' });
 						res.end(JSON.stringify({ status: 'error', message: 'Invalid JSON payload' }));
 						return;
 					}
-					
+
 					const userQuery = reqBody.query;
 					if (!userQuery) {
 						res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -356,7 +356,7 @@ module.exports = async (req, res) => {
 						headers: {
 							"Content-Type": "application/json",
 							"CATALYST-ORG": "60076561329",
-							"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_DEPLOYMENT_TOKEN}`
+							"Authorization": "Zoho-oauthtoken 1000.c223b92b237da7e91cc119e91fb8ebca.b2f5e8e095e21f77c9b0ed5d8f7fcd0f"
 						},
 						body: JSON.stringify(payload)
 					});
@@ -382,10 +382,52 @@ module.exports = async (req, res) => {
 					const jsonString = modelText.split('</think>').pop().trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
 					const plan = JSON.parse(jsonString);
 
+					// ══════════════════════════════════════════════════════
+					// NODE 2: DATABASE SEARCH — Query CaseMaster via ZCQL
+					// ══════════════════════════════════════════════════════
+					let dbResults = [];
+					try {
+						const conditions = [];
+
+						const categoryMap = {
+							'cyber_fraud': 'CYBER',
+							'narcotics': 'NARCOTICS',
+							'theft': 'THEFT',
+							'murder': 'MURDER'
+						};
+						
+						const category = plan.category || 'unknown';
+						if (category !== 'unknown' && categoryMap[category]) {
+							conditions.push(`Crime_Type LIKE '%${categoryMap[category]}%'`);
+						}
+
+						let zcqlQuery;
+						if (conditions.length > 0) {
+							zcqlQuery = `SELECT ROWID, CrimeNo, CaseMasterID, UnitID, Crime_Type, Status FROM CaseMaster WHERE ${conditions.join(' AND ')} LIMIT 25`;
+						} else {
+							zcqlQuery = `SELECT ROWID, CrimeNo, CaseMasterID, UnitID, Crime_Type, Status FROM CaseMaster LIMIT 10`;
+						}
+
+						console.log("[SEARCH NODE] ZCQL:", zcqlQuery);
+
+						const zcql = catalystApp.zcql();
+						const queryResult = await zcql.executeZCQLQuery(zcqlQuery);
+						
+						dbResults = queryResult.map(row => row.CaseMaster || row);
+
+						console.log(`[SEARCH NODE] Returned ${dbResults.length} record(s)`);
+
+					} catch (dbErr) {
+						console.error("[SEARCH NODE] DB query failed:", dbErr.message);
+						dbResults = [];
+					}
+
 					res.writeHead(200, { 'Content-Type': 'application/json' });
 					res.end(JSON.stringify({
 						status: 'success',
-						plan: plan
+						plan: plan,
+						dbData: dbResults,
+						resultCount: dbResults.length
 					}));
 
 				} catch (err) {
