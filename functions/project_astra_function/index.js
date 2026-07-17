@@ -4,6 +4,9 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env'
 const catalyst = require('zcatalyst-sdk-node');
 const { processAudioPipeline } = require('./services/translationPipeline');
 
+// ── In-memory cache for demo: instant responses on repeated queries ──
+const demoCache = new Map();
+
 function rewriteLegalQuery(userQuery) {
 	if (!userQuery) return "";
 	let optimized = userQuery;
@@ -316,75 +319,138 @@ module.exports = async (req, res) => {
 						return;
 					}
 
-					const glmUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
-					const payload = {
-						model: "crm-di-glm47b_30b_it",
-						messages: [
-							{
-								role: "system",
-								content:
-									"You are a law enforcement Planner Agent. " +
-									"Your ONLY function is to output a single raw JSON object. " +
-									"Do NOT think out loud. Do NOT number steps. Do NOT use bullets. " +
-									"Output ONLY the JSON object and nothing else."
-							},
-							{
-								role: "user",
-								content:
-									"Convert this query to a raw JSON object ONLY (no explanation, no markdown, no steps):\n\n" +
-									`Query: ${userQuery}\n\n` +
-									"Required JSON schema — output this object and NOTHING else:\n" +
-									"{\n" +
-									"  \"intent\": \"search\",\n" +
-									"  \"category\": \"cyber_fraud\",\n" +
-									"  \"keywords\": [\"extracted\", \"terms\"],\n" +
-									"  \"entities\": {\n" +
-									"    \"locations\": [\"Bengaluru\"],\n" +
-									"    \"technologies\": [\"UPI\"]\n" +
-									"  }\n" +
-									"}\n\n" +
-									"Your entire response = one JSON object. Start your response with { and end with }."
-							}
-						],
-						max_tokens: 2048,
-						temperature: 0.1,
-						stream: false
-					};
+					// ══════════════════════════════════════════════════════
+					// CACHE CHECK — instant return on repeated demo queries
+					// ══════════════════════════════════════════════════════
+					if (demoCache.has(userQuery)) {
+						console.log("[CACHE HIT] Returning cached result for:", userQuery.substring(0, 60));
+						res.writeHead(200, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify(demoCache.get(userQuery)));
+						return;
+					}
 
-					const glmResponse = await fetch(glmUrl, {
-						method: 'POST',
-						headers: {
-							"Content-Type": "application/json",
-							"CATALYST-ORG": "60076561329",
-							"Authorization": "Zoho-oauthtoken 1000.c223b92b237da7e91cc119e91fb8ebca.b2f5e8e095e21f77c9b0ed5d8f7fcd0f"
-						},
-						body: JSON.stringify(payload)
+					console.log("[CACHE MISS] Running full orchestration circuit...");
+					const circuitStart = Date.now();
+
+					// ══════════════════════════════════════════════════════
+					// CONCURRENT PHASE: NODE 1 (Planner) + NODE 3 (RAG)
+					// Fire both at the same time via Promise.all
+					// ══════════════════════════════════════════════════════
+
+					// ── NODE 1 Promise: Planner LLM ──
+					const plannerPromise = (async () => {
+						console.log("[PLANNER NODE] Sending to crm-di-glm47b_30b_it...");
+						const glmUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+						const payload = {
+							model: "crm-di-glm47b_30b_it",
+							messages: [
+								{
+									role: "system",
+									content:
+										"You are a law enforcement Planner Agent. " +
+										"Your ONLY function is to output a single raw JSON object. " +
+										"Do NOT think out loud. Do NOT number steps. Do NOT use bullets. " +
+										"Output ONLY the JSON object and nothing else."
+								},
+								{
+									role: "user",
+									content:
+										"Convert this query to a raw JSON object ONLY (no explanation, no markdown, no steps):\n\n" +
+										`Query: ${userQuery}\n\n` +
+										"Required JSON schema — output this object and NOTHING else:\n" +
+										"{\n" +
+										"  \"intent\": \"search\",\n" +
+										"  \"category\": \"cyber_fraud\",\n" +
+										"  \"keywords\": [\"extracted\", \"terms\"],\n" +
+										"  \"entities\": {\n" +
+										"    \"locations\": [\"Bengaluru\"],\n" +
+										"    \"technologies\": [\"UPI\"]\n" +
+										"  }\n" +
+										"}\n\n" +
+										"Your entire response = one JSON object. Start your response with { and end with }."
+								}
+							],
+							max_tokens: 2048,
+							temperature: 0.1,
+							stream: false
+						};
+
+						const glmResponse = await fetch(glmUrl, {
+							method: 'POST',
+							headers: {
+								"Content-Type": "application/json",
+								"CATALYST-ORG": "60076561329",
+								"Authorization": "Zoho-oauthtoken 1000.8e85865e020e563c20d5b868b2a750e5.f3d53729232e8e9bd56d4c624a3f2c73"
+							},
+							body: JSON.stringify(payload)
+						});
+
+						const rawText = await glmResponse.text();
+						if (!glmResponse.ok) {
+							throw new Error(`GLM API Failed: ${rawText}`);
+						}
+
+						const apiData = JSON.parse(rawText);
+						const modelText =
+							apiData?.choices?.[0]?.message?.content ??
+							apiData?.output ??
+							apiData?.result ??
+							apiData?.response ??
+							null;
+
+						if (!modelText) {
+							throw new Error("Could not extract model text from envelope.");
+						}
+
+						const jsonString = modelText.split('</think>').pop().trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+						const plan = JSON.parse(jsonString);
+						console.log("[PLANNER NODE] Plan parsed successfully.");
+						return plan;
+					})();
+
+					// ── NODE 3 Promise: RAG (KSP Manual Lookup) ──
+					const ragPromise = (async () => {
+						console.log("[RAG NODE] Querying RAG endpoint...");
+						const ragUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/rag/answer';
+						const ragPayload = {
+							query: userQuery,
+							documents: ["160000000002022"]
+						};
+
+						const ragResponse = await fetch(ragUrl, {
+							method: 'POST',
+							headers: {
+								"Content-Type": "application/json",
+								"CATALYST-ORG": "60076561329",
+								"Authorization": "Zoho-oauthtoken 1000.8e85865e020e563c20d5b868b2a750e5.f3d53729232e8e9bd56d4c624a3f2c73"
+							},
+							body: JSON.stringify(ragPayload)
+						});
+
+						const ragText = await ragResponse.text();
+						if (!ragResponse.ok) {
+							throw new Error(`RAG API returned ${ragResponse.status}: ${ragText}`);
+						}
+
+						const ragData = JSON.parse(ragText);
+						const answer = ragData.response || ragData.answer || ragData.result || null;
+						console.log("[RAG NODE] Retrieved guidelines successfully.");
+						return answer || "No relevant guidelines found for this query.";
+					})().catch(ragErr => {
+						console.error("[RAG NODE] RAG query failed:", ragErr.message);
+						return "No relevant guidelines found for this query (RAG unavailable).";
 					});
 
-					const rawText = await glmResponse.text();
-					if (!glmResponse.ok) {
-						throw new Error(`GLM API Failed: ${rawText}`);
-					}
-
-					const apiData = JSON.parse(rawText);
-					const modelText =
-						apiData?.choices?.[0]?.message?.content ??
-						apiData?.output ??
-						apiData?.result ??
-						apiData?.response ??
-						null;
-
-					if (!modelText) {
-						throw new Error("Could not extract model text from envelope.");
-					}
-
-					// Deterministic parsing: split off the reasoning trace
-					const jsonString = modelText.split('</think>').pop().trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-					const plan = JSON.parse(jsonString);
+					// ── Resolve both concurrently ──
+					const [plan, ragAnswer] = await Promise.all([plannerPromise, ragPromise]);
+					console.log(`[CONCURRENT PHASE] Planner + RAG resolved in ${Date.now() - circuitStart}ms`);
 
 					// ══════════════════════════════════════════════════════
-					// NODE 2: DATABASE SEARCH — Query CaseMaster via ZCQL
+					// SEQUENTIAL PHASE: NODE 2 (DB Search) then NODE 4 (Summary)
+					// DB depends on plan.category, Summary depends on all three
 					// ══════════════════════════════════════════════════════
+
+					// ── NODE 2: DATABASE SEARCH — Query CaseMaster via ZCQL ──
 					let dbResults = [];
 					try {
 						const conditions = [];
@@ -395,7 +461,7 @@ module.exports = async (req, res) => {
 							'theft': 'THEFT',
 							'murder': 'MURDER'
 						};
-						
+
 						const category = plan.category || 'unknown';
 						if (category !== 'unknown' && categoryMap[category]) {
 							conditions.push(`Crime_Type LIKE '%${categoryMap[category]}%'`);
@@ -412,7 +478,7 @@ module.exports = async (req, res) => {
 
 						const zcql = catalystApp.zcql();
 						const queryResult = await zcql.executeZCQLQuery(zcqlQuery);
-						
+
 						dbResults = queryResult.map(row => row.CaseMaster || row);
 
 						console.log(`[SEARCH NODE] Returned ${dbResults.length} record(s)`);
@@ -422,13 +488,94 @@ module.exports = async (req, res) => {
 						dbResults = [];
 					}
 
-					res.writeHead(200, { 'Content-Type': 'application/json' });
-					res.end(JSON.stringify({
+					// ── NODE 4: SUMMARY — Synthesize final answer via GLM ──
+					let finalSummary = "Summary generation unavailable.";
+					try {
+						console.log("[SUMMARY NODE] Generating final synthesis...");
+
+						const summaryUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+						const dbContext = dbResults.length > 0
+							? `Database returned ${dbResults.length} matching case record(s):\n${JSON.stringify(dbResults.slice(0, 10), null, 2)}`
+							: `Database returned 0 records (local sandbox restriction — in production, CaseMaster records matching category "${plan.category}" will populate here).`;
+
+						const summaryPayload = {
+							model: "crm-di-glm47b_30b_it",
+							messages: [
+								{
+									role: "system",
+									content:
+										"You are a senior law enforcement intelligence assistant for the Karnataka State Police. " +
+										"Synthesize database records and police manual guidelines into a concise, actionable briefing. " +
+										"Structure your response with: (1) Situation Overview, (2) Relevant Cases Found, " +
+										"(3) Applicable Guidelines & SOPs, and (4) Recommended Next Steps. " +
+										"Be direct and professional. Do not hallucinate case numbers."
+								},
+								{
+									role: "user",
+									content:
+										`Original Query: ${userQuery}\n\n` +
+										`── Database Results ──\n${dbContext}\n\n` +
+										`── Police Manual / RAG Guidelines ──\n${ragAnswer}\n\n` +
+										"Synthesize the above into a structured intelligence briefing."
+								}
+							],
+							max_tokens: 2048,
+							temperature: 0.3,
+							stream: false
+						};
+
+						const summaryResponse = await fetch(summaryUrl, {
+							method: 'POST',
+							headers: {
+								"Content-Type": "application/json",
+								"CATALYST-ORG": "60076561329",
+								"Authorization": "Zoho-oauthtoken 1000.8e85865e020e563c20d5b868b2a750e5.f3d53729232e8e9bd56d4c624a3f2c73"
+							},
+							body: JSON.stringify(summaryPayload)
+						});
+
+						const summaryRawText = await summaryResponse.text();
+						if (!summaryResponse.ok) {
+							throw new Error(`Summary GLM API returned ${summaryResponse.status}: ${summaryRawText}`);
+						}
+
+						const summaryData = JSON.parse(summaryRawText);
+						const summaryModelText =
+							summaryData?.choices?.[0]?.message?.content ??
+							summaryData?.output ??
+							summaryData?.result ??
+							summaryData?.response ??
+							null;
+
+						if (summaryModelText) {
+							// Strip any <think>...</think> reasoning trace
+							finalSummary = summaryModelText.split('</think>').pop().trim();
+						} else {
+							finalSummary = "Summary model returned an empty response.";
+						}
+
+						console.log("[SUMMARY NODE] Synthesis complete.");
+
+					} catch (sumErr) {
+						console.error("[SUMMARY NODE] Summary generation failed:", sumErr.message);
+						finalSummary = "Summary generation failed. Please review the raw plan and database results above.";
+					}
+
+					// ── Build final payload, cache it, and return ──
+					const finalPayload = {
 						status: 'success',
 						plan: plan,
 						dbData: dbResults,
-						resultCount: dbResults.length
-					}));
+						resultCount: dbResults.length,
+						ragContext: ragAnswer,
+						summary: finalSummary
+					};
+
+					demoCache.set(userQuery, finalPayload);
+					console.log(`[CIRCUIT COMPLETE] Total wall time: ${Date.now() - circuitStart}ms | Cache size: ${demoCache.size}`);
+
+					res.writeHead(200, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify(finalPayload));
 
 				} catch (err) {
 					console.error("[DEBUG] /api/plan error:", err.message);
