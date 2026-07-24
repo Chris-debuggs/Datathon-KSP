@@ -1,0 +1,10 @@
+{
+	"name": "ksp_datathon_function",
+	"version": "1.0.0",
+	"main": "index.js",
+	"author": "Chris Nevin K Dence",
+	"dependencies": {
+		"zcatalyst-sdk-node": "latest",
+		"express": "^4.19.2"
+	}
+}
