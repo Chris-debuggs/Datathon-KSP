@@ -1,0 +1,8 @@
+{
+	"command": "echo Please specify the start-up command in the app-config.json file under the key command for AppSail $X_ZC_RESOURCE_NAME",
+	"build_path": ".",
+	"stack": "node24",
+	"env_variables": {},
+	"memory": 256,
+	"scripts": {}
+}

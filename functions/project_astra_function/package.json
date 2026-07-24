@@ -1,0 +1,12 @@
+{
+	"name": "project_astra_function",
+	"version": "1.0.0",
+	"main": "index.js",
+	"author": "faiz",
+	"dependencies": {
+		"dotenv": "^17.4.2",
+		"multer": "^2.2.0",
+		"pdf-parse": "^2.4.5",
+		"zcatalyst-sdk-node": "latest"
+	}
+}

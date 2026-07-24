@@ -1,10 +1,11 @@
 {
   "functions": {
+    "source": "functions",
     "targets": [
+      "project_astra_function",
       "ksp_datathon_function"
     ],
-    "ignore": [],
-    "source": "functions"
+    "ignore": []
   },
   "client": {
     "source": "react-app",

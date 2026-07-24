@@ -1,0 +1,13 @@
+{
+	"deployment": {
+		"name": "project_astra_function",
+		"stack": "node24",
+		"type": "advancedio",
+		"env_variables": {
+			"QUICKML_CONNECTION_NAME": "quickml_connection"
+		}
+	},
+	"execution": {
+		"main": "index.js"
+	}
+}
