@@ -59,6 +59,21 @@ async function refreshZohoToken() {
 	}
 }
 
+async function fetchWithAuth(url, options = {}) {
+	let response = await fetch(url, options);
+	if (response.status === 401) {
+		console.log("[AUTH] Token expired, refreshing...");
+		const newToken = await refreshZohoToken();
+		
+		if (options.headers) {
+			options.headers['Authorization'] = `Zoho-oauthtoken ${newToken}`;
+		}
+		
+		response = await fetch(url, options);
+	}
+	return response;
+}
+
 /**
  * Catalyst Serverless Advanced I/O Function Handler
  *
@@ -263,7 +278,7 @@ module.exports = async (req, res) => {
 						"documents": [process.env.QUICKML_DOC_ID]
 					});
 
-					let ragResponse = await fetch(ragUrl, {
+					const ragResponse = await fetchWithAuth(ragUrl, {
 						method: 'POST',
 						headers: {
 							"Content-Type": "application/json",
@@ -272,19 +287,6 @@ module.exports = async (req, res) => {
 						},
 						body: payload
 					});
-
-					if (ragResponse.status === 401) {
-						await refreshZohoToken();
-						ragResponse = await fetch(ragUrl, {
-							method: 'POST',
-							headers: {
-								"Content-Type": "application/json",
-								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
-								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
-							},
-							body: payload
-						});
-					}
 
 					const ragText = await ragResponse.text();
 					if (!ragResponse.ok) {
@@ -350,6 +352,12 @@ module.exports = async (req, res) => {
 						return;
 					}
 
+					let historyContext = "";
+					if (Array.isArray(reqBody.history) && reqBody.history.length > 0) {
+						historyContext = "── Conversation History ──\n" + 
+							reqBody.history.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join("\n") + "\n\n";
+					}
+
 					// ══════════════════════════════════════════════════════
 					// CACHE CHECK — instant return on repeated demo queries
 					// ══════════════════════════════════════════════════════
@@ -371,7 +379,7 @@ module.exports = async (req, res) => {
 					// ── NODE 1 Promise: Planner LLM ──
 					const plannerPromise = (async () => {
 						console.log("[PLANNER NODE] Sending to crm-di-glm47b_30b_it...");
-						const glmUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+						const glmUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
 						const payload = {
 							model: "crm-di-glm47b_30b_it",
 							messages: [
@@ -387,6 +395,7 @@ module.exports = async (req, res) => {
 									role: "user",
 									content:
 										"Convert this query to a raw JSON object ONLY (no explanation, no markdown, no steps):\n\n" +
+										historyContext +
 										`Query: ${userQuery}\n\n` +
 										"Required JSON schema — output this object and NOTHING else:\n" +
 										"{\n" +
@@ -394,8 +403,17 @@ module.exports = async (req, res) => {
 										"  \"category\": \"cyber_fraud\",\n" +
 										"  \"keywords\": [\"extracted\", \"terms\"],\n" +
 										"  \"entities\": {\n" +
-										"    \"locations\": [\"Bengaluru\"],\n" +
-										"    \"technologies\": [\"UPI\"]\n" +
+										"    \"fir_no\": null,\n" +
+										"    \"name\": null,\n" +
+										"    \"phone\": null,\n" +
+										"    \"upi_id\": null,\n" +
+										"    \"vehicle\": null,\n" +
+										"    \"bank_account\": null,\n" +
+										"    \"aadhaar\": null,\n" +
+										"    \"address\": null,\n" +
+										"    \"crime_type\": \"cyber_fraud\",\n" +
+										"    \"police_station\": null,\n" +
+										"    \"district\": null\n" +
 										"  }\n" +
 										"}\n\n" +
 										"Your entire response = one JSON object. Start your response with { and end with }."
@@ -406,11 +424,11 @@ module.exports = async (req, res) => {
 							stream: false
 						};
 
-						const glmResponse = await fetch(glmUrl, {
+						const glmResponse = await fetchWithAuth(glmUrl, {
 							method: 'POST',
 							headers: {
 								"Content-Type": "application/json",
-								"CATALYST-ORG": "60076561329",
+								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
 								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
 							},
 							body: JSON.stringify(payload)
@@ -442,17 +460,17 @@ module.exports = async (req, res) => {
 					// ── NODE 3 Promise: RAG (KSP Manual Lookup) ──
 					const ragPromise = (async () => {
 						console.log("[RAG NODE] Querying RAG endpoint...");
-						const ragUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/rag/answer';
+						const ragUrl = process.env.QUICKML_RAG_ENDPOINT;
 						const ragPayload = {
 							query: userQuery,
-							documents: ["160000000002022"]
+							documents: [process.env.QUICKML_DOC_ID]
 						};
 
-						const ragResponse = await fetch(ragUrl, {
+						const ragResponse = await fetchWithAuth(ragUrl, {
 							method: 'POST',
 							headers: {
 								"Content-Type": "application/json",
-								"CATALYST-ORG": "60076561329",
+								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
 								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
 							},
 							body: JSON.stringify(ragPayload)
@@ -525,7 +543,7 @@ module.exports = async (req, res) => {
 					try {
 						console.log("[SUMMARY NODE] Generating final synthesis...");
 
-						const summaryUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+						const summaryUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
 						const dbContext = dbResults.length > 0
 							? `Database returned ${dbResults.length} matching case record(s):\n${JSON.stringify(dbResults.slice(0, 10), null, 2)}`
 							: `Database returned 0 records (local sandbox restriction — in production, CaseMaster records matching category "${plan.category}" will populate here).`;
@@ -543,7 +561,7 @@ module.exports = async (req, res) => {
 										"{\n" +
 										"  \"summary_text\": \"<Markdown string with sections: (1) Situation Overview, (2) Relevant Cases Found, (3) Applicable Guidelines & SOPs, (4) Recommended Next Steps>\",\n" +
 										"  \"source_nodes\": [\n" +
-										"    { \"fir_id\": \"<CrimeNo or CaseMasterID from the database records>\", \"reason\": \"<Brief justification of why this case is relevant>\" }\n" +
+										"    { \"fir_id\": \"<CrimeNo or CaseMasterID from the database records>\", \"reason\": \"<Brief justification>\", \"confidence_score\": \"<A percentage between 0% and 100%>\" }\n" +
 										"  ]\n" +
 										"}\n" +
 										"Rules:\n" +
@@ -554,6 +572,7 @@ module.exports = async (req, res) => {
 								{
 									role: "user",
 									content:
+										historyContext +
 										`Original Query: ${userQuery}\n\n` +
 										`── Database Results ──\n${dbContext}\n\n` +
 										`── Police Manual / RAG Guidelines ──\n${ragAnswer}\n\n` +
@@ -565,11 +584,11 @@ module.exports = async (req, res) => {
 							stream: false
 						};
 
-						const summaryResponse = await fetch(summaryUrl, {
+						const summaryResponse = await fetchWithAuth(summaryUrl, {
 							method: 'POST',
 							headers: {
 								"Content-Type": "application/json",
-								"CATALYST-ORG": "60076561329",
+								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
 								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
 							},
 							body: JSON.stringify(summaryPayload)
@@ -695,11 +714,11 @@ module.exports = async (req, res) => {
 				sttForm.append('language', 'kn');
 
 				const sttUrl = 'https://api.catalyst.zoho.in/quickml/api/v1/models/zia/audio/transcribe';
-				const sttResponse = await fetch(sttUrl, {
+				const sttResponse = await fetchWithAuth(sttUrl, {
 					method: 'POST',
 					headers: {
 						'Authorization': authHeader,
-						'CATALYST-ORG': '60076561329'
+						'CATALYST-ORG': process.env.CATALYST_ORG_ID
 					},
 					body: sttForm
 				});
@@ -725,7 +744,7 @@ module.exports = async (req, res) => {
 				// clean English sentence last.  We let the full response through
 				// (max_tokens 1500) and then extract the last Kannada-free line.
 				console.log('[VOICE NODE] Step 2: Translating Kannada → English via GLM...');
-				const translateGlmUrl = 'https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/glm/chat';
+				const translateGlmUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
 				const translatePayload = {
 					model: "crm-di-glm47b_30b_it",
 					messages: [
@@ -762,11 +781,11 @@ module.exports = async (req, res) => {
 					stream: false
 				};
 
-				const translateGlmResponse = await fetch(translateGlmUrl, {
+				const translateGlmResponse = await fetchWithAuth(translateGlmUrl, {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
-						'CATALYST-ORG': '60076561329',
+						'CATALYST-ORG': process.env.CATALYST_ORG_ID,
 						'Authorization': authHeader
 					},
 					body: JSON.stringify(translatePayload)
