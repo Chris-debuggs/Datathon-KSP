@@ -25,12 +25,17 @@ const ExportReport = ({ targetRef, filename = 'ASTRA_Investigation_Report', labe
 
       // ── Step 1: Capture DOM as canvas image ───────────────────────────
       const canvas = await html2canvas(element, {
-        scale: 2,              // higher resolution
-        useCORS: true,         // allow cross origin images
+        scale: 2,
+        useCORS: true,
         backgroundColor: '#FFFFFF',
         logging: false,
         windowWidth: element.scrollWidth,
         windowHeight: element.scrollHeight,
+        scrollX: 0,
+        scrollY: -window.scrollY,
+        allowTaint: true,
+        foreignObjectRendering: false,
+        removeContainer: true,
       });
 
       // ── Step 2: Create PDF ────────────────────────────────────────────

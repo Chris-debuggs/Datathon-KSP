@@ -201,7 +201,7 @@ const Chat = () => {
     newChatBtn: { width: '100%', marginTop: '14px', padding: '10px', background: '#E8C547', color: '#1A3A5C', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' },
     chatMain: { flex: 1, display: 'flex', flexDirection: 'column', background: '#F5F0E8' },
     exportBar: { padding: '8px 20px', background: '#fff', borderBottom: '1px solid #E2D5C3', display: 'flex', justifyContent: 'flex-end' },
-    messages: { flex: 1, padding: '24px', overflowY: 'auto' },
+    messages: { flex: 1, padding: '24px', overflowY: 'auto', boxSizing: 'border-box' },
     intro: { background: '#fff', border: '1px solid #E2D5C3', borderLeft: '4px solid #1A3A5C', borderRadius: '10px', padding: '18px 22px', marginBottom: '20px', maxWidth: '680px' },
     introTitle: { fontSize: '13px', fontWeight: '700', color: '#1A3A5C', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' },
     introText: { fontSize: '14px', color: '#4A3728', lineHeight: '1.6' },
