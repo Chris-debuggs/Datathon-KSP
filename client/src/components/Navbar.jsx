@@ -8,7 +8,6 @@ const Navbar = ({ activePage }) => {
     { label: 'Chat', path: '/chat' },
     { label: 'Search', path: '/search' },
     { label: 'Analytics', path: '/analytics' },
-    { label: 'Graph', path: '/graph' },
   ];
 
   const styles = {
@@ -80,8 +79,8 @@ const Navbar = ({ activePage }) => {
       {/* User Info */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <div style={{ textAlign: 'right' }}>
-          <div style={styles.userName}> Inspector XYZ</div>
-          <div style={styles.userRole}> ABC Police Station</div>
+          <div style={styles.userName}>XYZ</div>
+          <div style={styles.userRole}>Whitefield Police Station</div>
         </div>
         <div style={styles.avatar}>XY</div>
       </div>
