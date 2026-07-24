@@ -237,7 +237,6 @@ const Graph = ({ graphData = null }) => {
         // ── Hover highlight ─────────────────────────────────────────────────────
         node
             .on('mouseover', function (event, d) {
-                // eslint-disable-next-line no-unused-vars
                 const config = getConfig(d.type);
                 d3.select(this).select('circle, rect')
                     .attr('stroke', '#E8C547')
