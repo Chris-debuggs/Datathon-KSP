@@ -51,6 +51,50 @@ app.get('/api/fir/search', async (req, res) => {
     }
 });
 
+// Ticket 2.2: FIR Details by ID or CrimeNo
+app.get('/api/fir/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const catalystApp = catalyst.initialize(req);
+        const zcql = catalystApp.zcql();
+        
+        // Flexible lookup: Match ROWID, CaseMasterID, or CrimeNo
+        const query = `SELECT * FROM CaseMaster WHERE ROWID = '${id}' OR CaseMasterID = '${id}' OR CrimeNo = '${id}' LIMIT 1`;
+        const result = await zcql.executeZCQLQuery(query);
+        
+        if (!result || result.length === 0) {
+            return res.status(404).json({ status: "error", message: "FIR not found" });
+        }
+        
+        const row = result[0].CaseMaster;
+        
+        // Assemble data expected by FIRDetail.jsx
+        const detailData = {
+            CrimeNo: row.CrimeNo,
+            policeStation: row.UnitName || row.UnitID || 'Unknown PS',
+            district: row.District_Name || 'Unknown District',
+            CrimeRegisteredDate: row.FIR_Date || new Date().toISOString(),
+            status: row.Status || 'Under Investigation',
+            BriefFacts: row.BriefFacts || 'No detailed facts available in the system.',
+            // Empty safe-lists to prevent UI crashes if the relational tables aren't joined
+            accused_list: [],
+            victim_list: [],
+            evidence_list: [],
+            witness_list: [],
+            timeline: [
+                { date: row.FIR_Date || 'N/A', event: 'FIR Registered' }
+            ],
+            recommended_actions: ['Conduct preliminary witness interviews', 'Review associated CCTV footage'],
+            source_nodes: [{ CrimeNo: row.CrimeNo, confidence_score: 1.0 }]
+        };
+
+        return res.status(200).json({ status: "success", data: detailData });
+    } catch (err) {
+        console.error("Error executing FIR detail fetch:", err);
+        return res.status(500).json({ status: "error", message: "Internal server error during FIR detail lookup." });
+    }
+});
+
 const crypto = require('crypto');
 
 app.post('/api/graph', async (req, res) => {
@@ -226,23 +270,23 @@ app.get('/api/analytics', async (req, res) => {
         // Process results
         let totalCases = 0;
         const statusBreakdown = statusRes.map(row => {
-            const count = parseInt(row.CaseMaster.COUNT) || 0;
+            const count = parseInt(row.CaseMaster['COUNT(ROWID)']) || parseInt(row.CaseMaster.COUNT) || 0;
             totalCases += count;
             return { status: row.CaseMaster.Status || 'Unknown', count };
         });
 
         const crimeTypes = crimeTypeRes.map(row => ({
             label: row.CaseMaster.Crime_Type || 'Unknown',
-            value: parseInt(row.CaseMaster.COUNT) || 0
+            value: parseInt(row.CaseMaster['COUNT(ROWID)']) || parseInt(row.CaseMaster.COUNT) || 0
         }));
 
         const unitWorkload = unitRes.map(row => ({
             unit: row.CaseMaster.UnitID || 'Unknown',
-            count: parseInt(row.CaseMaster.COUNT) || 0
+            count: parseInt(row.CaseMaster['COUNT(ROWID)']) || parseInt(row.CaseMaster.COUNT) || 0
         }));
 
-        const arrestCount = parseInt(arrestRes[0]?.ArrestSurrender?.COUNT || arrestRes[0]?.COUNT) || 0;
-        const chargesheetCount = parseInt(chargesheetRes[0]?.ChargesheetDetails?.COUNT || chargesheetRes[0]?.COUNT) || 0;
+        const arrestCount = parseInt(arrestRes[0]?.ArrestSurrender?.['COUNT(ROWID)'] || arrestRes[0]?.ArrestSurrender?.COUNT || arrestRes[0]?.['COUNT(ROWID)']) || 0;
+        const chargesheetCount = parseInt(chargesheetRes[0]?.ChargesheetDetails?.['COUNT(ROWID)'] || chargesheetRes[0]?.ChargesheetDetails?.COUNT || chargesheetRes[0]?.['COUNT(ROWID)']) || 0;
 
         return res.status(200).json({
             status: "success",

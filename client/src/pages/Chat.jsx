@@ -89,8 +89,13 @@ const Chat = () => {
   const messagesAreaRef = useRef(null);
 
   useEffect(() => {
-    // Phase 4 Audit: Mock endpoints removed, local history initialized to empty.
-    setConversations([]);
+    // Phase 4 Audit: Mock endpoints removed, now using localStorage for history persistence
+    const saved = localStorage.getItem('astra_conversations');
+    if (saved) {
+      setConversations(JSON.parse(saved));
+    } else {
+      setConversations([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -139,6 +144,21 @@ const Chat = () => {
     const userMessage = inputValue.trim();
     setInputValue('');
     setSystemBusy(false);
+    
+    // Auto-save conversation to history if this is the first message
+    if (contextHistory.length === 0) {
+      const newId = Date.now();
+      const newConv = {
+        id: newId,
+        title: userMessage.substring(0, 30) + (userMessage.length > 30 ? '...' : ''),
+        time: getTimestamp()
+      };
+      const updatedConvs = [newConv, ...conversations];
+      setConversations(updatedConvs);
+      setActiveConv(newId);
+      localStorage.setItem('astra_conversations', JSON.stringify(updatedConvs));
+    }
+    
     const updatedHistory = [
       ...contextHistory,
       { role: 'user', content: userMessage, timestamp: getTimestamp() }
