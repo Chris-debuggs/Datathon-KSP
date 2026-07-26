@@ -1,0 +1,14 @@
+﻿ΓÇ╝ skipping serve of function [project_astra_function] since Required NodeJS version v24 is not present in the system path
+ΓÇ╝ functions: No targets are ready to be served in local
+
+├ù Error: The required node.js runtime version v24 is not present in the system path
+
+Please install node.js version v24 and configure it using the `catalyst config` command.
+
+Example: catalyst config:set node24.bin=<path-to-node-v24-binary>
+
+├ù Error: No valid components to serve!
+
+Please rectify the above errors, if any and try once again.
+
+REF: https://www.zoho.com/catalyst/help/cli-serve.html

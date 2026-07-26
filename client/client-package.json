@@ -1,0 +1,6 @@
+{
+    "name": "react-vite",
+    "scripts": {
+        "build": "react-scripts build"
+    }
+}

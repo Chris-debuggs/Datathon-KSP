@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "source": "functions",
+    "targets": [
+      "project_astra_function",
+      "ksp_datathon_function",
+      "graph_worker_job"
+    ]
+  },
+  "client": {
+    "source": "client/build"
+  }
+}

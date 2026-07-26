@@ -1,0 +1,13 @@
+{
+	"deployment": {
+		"name": "graph_worker_job",
+		"stack": "node24",
+		"type": "cron",
+		"env_variables": {
+			"NODE_ENV": "production"
+		}
+	},
+	"execution": {
+		"main": "index.js"
+	}
+}
