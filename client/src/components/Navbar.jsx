@@ -1,8 +1,26 @@
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 
 const Navbar = ({ activePage }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const session = localStorage.getItem('astra_user');
+    if (session) {
+      try {
+        setUser(JSON.parse(session));
+      } catch (e) {
+        console.error("Failed to parse user session");
+      }
+    }
+  }, [location.pathname]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('astra_user');
+    navigate('/login');
+  };
 
   const links = [
     { label: 'Chat', path: '/chat' },
@@ -47,12 +65,16 @@ const Navbar = ({ activePage }) => {
     userRole: {
       fontSize: '11px', color: '#E8C547',
     },
-    avatar: {
-      width: '34px', height: '34px', borderRadius: '50%',
-      background: '#6B3A2A', border: '2px solid #E8C547',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontSize: '12px', fontWeight: '700',
-    },
+    logoutBtn: {
+      padding: '6px 12px',
+      borderRadius: '4px',
+      background: 'rgba(192, 57, 43, 0.2)',
+      border: '1px solid #C0392B',
+      color: '#fff',
+      fontSize: '12px',
+      fontWeight: '600',
+      cursor: 'pointer',
+    }
   };
 
   return (
@@ -77,12 +99,18 @@ const Navbar = ({ activePage }) => {
       </div>
 
       {/* User Info */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div style={{ textAlign: 'right' }}>
-          <div style={styles.userName}>XYZ</div>
-          <div style={styles.userRole}>Whitefield Police Station</div>
-        </div>
-        <div style={styles.avatar}>XY</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+        {user && (
+          <>
+            <div style={{ textAlign: 'right' }}>
+              <div style={styles.userName}>{user.email}</div>
+              <div style={styles.userRole}>{user.role}</div>
+            </div>
+            <button style={styles.logoutBtn} onClick={handleLogout}>
+              Logout
+            </button>
+          </>
+        )}
       </div>
     </nav>
   );

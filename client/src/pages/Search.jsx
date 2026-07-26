@@ -2,9 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { apiFetch, isRateLimitError, SYSTEM_BUSY_MESSAGE } from '../utils/apiFetch';
-
-// ─── Base URL ───────────────────────────────────────────────────────────────
-const BASE_URL = 'http://localhost:3000/server/ksp_datathon_function';
+import { BASE_URL } from '../utils/config';
 
 // ─── Status badge color ──────────────────────────────────────────────────────
 const getStatusStyle = (status) => {

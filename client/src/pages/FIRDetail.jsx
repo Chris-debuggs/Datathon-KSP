@@ -3,50 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import ExportReport from '../components/ExportReport';
 import { apiFetch, isRateLimitError } from '../utils/apiFetch';
+import { BASE_URL } from '../utils/config';
 
-const BASE_URL = 'http://localhost:3000/server/ksp_datathon_function';
-
-// ─── Mock fallback ───────────────────────────────────────────────────────────
-const mockFIRData = {
-    CaseMasterID: 892341,
-    CrimeNo: '104430006202600001',
-    CaseNo: '202600001',
-    CrimeRegisteredDate: '2026-06-15T09:30:00Z',
-    BriefFacts: 'Suspect transferred funds via unauthorized UPI access. Victim reported unauthorized debit of Rs. 45,000 from their account linked to UPI ID. Investigation reveals a pattern of similar transactions across multiple victims in Bangalore Urban district.',
-    status: 'Under Investigation',
-    district: 'Bangalore Urban',
-    policeStation: 'Whitefield PS',
-    accused_list: [
-        { AccusedMasterID: 5543, AccusedName: 'Ramesh Kumar', AgeYear: 48, GenderID: 'M', PersonID: 'A1' },
-        { AccusedMasterID: 5544, AccusedName: 'Suresh Rao', AgeYear: 35, GenderID: 'M', PersonID: 'A2' },
-    ],
-    victim_list: [
-        { VictimMasterID: 1001, VictimName: 'Anand Krishnan', AgeYear: 52, GenderID: 'M' },
-    ],
-    witness_list: [
-        { name: 'Mohan Das', contact: 'Available at PS' },
-    ],
-    evidence_list: [
-        { type: 'Document', description: 'Bank transaction records' },
-        { type: 'Digital', description: 'UPI transaction logs' },
-        { type: 'Document', description: 'Victim statement' },
-    ],
-    timeline: [
-        { date: '15 Jun 2026', event: 'FIR Registered at Whitefield PS' },
-        { date: '16 Jun 2026', event: 'Investigation officer assigned' },
-        { date: '18 Jun 2026', event: 'Bank records obtained' },
-        { date: '22 Jun 2026', event: 'Accused identified' },
-    ],
-    recommended_actions: [
-        'Obtain call detail records for accused phone numbers',
-        'Freeze bank accounts linked to UPI ID',
-        'Issue lookout notice for primary accused',
-        'Coordinate with cyber crime cell',
-    ],
-    source_nodes: [
-        { CrimeNo: '104430006202600001', entity_type: 'CaseMaster', confidence_score: 0.98 },
-    ],
-};
+// Mock data purged in Phase 4 Audit
 
 const getStatusColor = (status) => {
     if (status === 'Under Investigation') return { bg: '#FEF3CD', color: '#6B3A2A', border: '#E8C547' };
@@ -66,12 +25,10 @@ const FIRDetail = () => {
         const loadFIR = async () => {
             setIsLoading(true);
             try {
-                // Try real API first, fallback to mock
-                const data = await apiFetch(`${BASE_URL}/api/fir/${id}`)
-                    .catch(() => null);
-                setFir(data?.data || mockFIRData);
+                const data = await apiFetch(`${BASE_URL}/api/fir/${id}`);
+                setFir(data?.data || null);
             } catch {
-                setFir(mockFIRData);
+                setFir(null);
             } finally {
                 setIsLoading(false);
             }

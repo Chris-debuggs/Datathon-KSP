@@ -34,7 +34,14 @@ export const apiFetch = async (url, options = {}) => {
 
     // Handle other non-ok responses
     if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
+      let serverError = `API error: ${res.status}`;
+      try {
+        const errorData = await res.json();
+        if (errorData.message) serverError = `Backend Error: ${errorData.message}`;
+      } catch (e) {
+        // Body isn't JSON, ignore
+      }
+      throw new Error(serverError);
     }
 
     return await res.json();

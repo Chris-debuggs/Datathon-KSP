@@ -3,24 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import ExportReport from '../components/ExportReport';
 import { apiFetch, isRateLimitError, SYSTEM_BUSY_MESSAGE } from '../utils/apiFetch';
+import { BASE_URL, ASTRA_BASE_URL } from '../utils/config';
 
-const BASE_URL = 'http://localhost:3000/server/ksp_datathon_function';
-
-// ─── Mock fallbacks (used if API not ready) ─────────────────────────────────
-const mockConversationHistory = [
-  { id: 1, title: 'UPI Fraud — Case #4421', time: '2h ago' },
-  { id: 2, title: 'Vehicle theft Whitefield', time: 'Yesterday' },
-  { id: 3, title: 'Cyber scam — Case #3105', time: '3 days ago' },
-];
-
-const mockChatResponse = (message) => ({
-  success: true,
-  session_id: 'sess_98234_ksp',
-  response: `Based on your query about "${message}", I found matching cyber fraud incidents. In Case 104430006202600001, registered at Unit 43, an accused individual named Ramesh Kumar (Age: 48) is under active investigation.`,
-  source_nodes: [
-    { CaseMasterID: 892341, CrimeNo: '104430006202600001', entity_type: 'Accused', AccusedMasterID: 5543, confidence_score: 0.98 },
-  ],
-});
+// Mock data purged in Phase 4 Audit
 
 // ─── Timestamp ──────────────────────────────────────────────────────────────
 const getTimestamp = () => new Date().toLocaleTimeString('en-IN', {
@@ -28,21 +13,44 @@ const getTimestamp = () => new Date().toLocaleTimeString('en-IN', {
 });
 
 // ─── Ticket 2.6: Exponential Backoff Polling ───────────────────────────────
+// AUDIT FIX 3.4: Added 502/503 gateway handling + fixed result_url bug
 const pollJobStatus = (jobId, attempt = 1, onComplete, onError) => {
-  if (attempt > 7) { onError('Analysis timed out.'); return; }
+  if (attempt > 7) { onError('Analysis timed out. Please try again.'); return; }
   const delay = 2000 * Math.pow(1.5, attempt - 1);
   setTimeout(async () => {
     try {
-      const data = await apiFetch(`${BASE_URL}/api/status/${jobId}`);
+      const res = await fetch(`${BASE_URL}/api/status/${jobId}`);
+
+      // Handle 502/503 — Catalyst gateway hiccup during cold start, retry silently
+      if (res.status === 502 || res.status === 503) {
+        console.warn(`[POLL] Gateway error ${res.status}, retrying (attempt ${attempt})...`);
+        pollJobStatus(jobId, attempt + 1, onComplete, onError);
+        return;
+      }
+
+      // Handle non-JSON responses (e.g. Catalyst error HTML pages)
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.warn('[POLL] Non-JSON response, retrying...');
+        pollJobStatus(jobId, attempt + 1, onComplete, onError);
+        return;
+      }
+
+      const data = await res.json();
       if (data.status === 'complete') {
-        const graphData = await apiFetch(data.result_url);
-        onComplete(graphData);
+        // Result is returned directly in the response, not via a separate URL
+        onComplete(data.result || data);
       } else {
         pollJobStatus(jobId, attempt + 1, onComplete, onError);
       }
     } catch (err) {
-      if (isRateLimitError(err)) onError(SYSTEM_BUSY_MESSAGE);
-      else onError('Polling failed. Please try again.');
+      if (isRateLimitError(err)) {
+        onError(SYSTEM_BUSY_MESSAGE);
+      } else {
+        // Network errors → retry silently instead of hard-crashing
+        console.warn('[POLL] Network error, retrying:', err.message);
+        pollJobStatus(jobId, attempt + 1, onComplete, onError);
+      }
     }
   }, delay);
 };
@@ -65,7 +73,7 @@ const LoadingDots = () => {
 const Chat = () => {
   const navigate = useNavigate();
   const [contextHistory, setContextHistory] = useState([]);
-  const [conversations, setConversations] = useState(mockConversationHistory);
+  const [conversations, setConversations] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -80,11 +88,9 @@ const Chat = () => {
   const messagesEndRef = useRef(null);
   const messagesAreaRef = useRef(null);
 
-  // Load real conversation history, fallback to mock
   useEffect(() => {
-    apiFetch(`${BASE_URL}/api/conversations`)
-      .then(data => { if (data?.data?.length) setConversations(data.data); })
-      .catch(() => setConversations(mockConversationHistory));
+    // Phase 4 Audit: Mock endpoints removed, local history initialized to empty.
+    setConversations([]);
   }, []);
 
   useEffect(() => {
@@ -141,27 +147,21 @@ const Chat = () => {
     setIsLoading(true);
 
     try {
-      let data;
-      try {
-        // Try real API first
-        data = await apiFetch(`${BASE_URL}/api/chat`, {
-          method: 'POST',
-          body: JSON.stringify({ message: userMessage, history: updatedHistory })
-        });
-      } catch {
-        // Fallback to mock if API not ready
-        await new Promise(res => setTimeout(res, 1500));
-        data = mockChatResponse(userMessage);
-      }
+      const data = await apiFetch(`${ASTRA_BASE_URL}/api/plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: userMessage, history: updatedHistory })
+      });
 
       setIsLoading(false);
 
       if (data.job_id) { handleAsyncJob(data.job_id); return; }
 
-      await streamText(data.response);
+      const aiText = data.summary || data.response || "No response received.";
+      await streamText(aiText);
       setContextHistory(prev => [...prev, {
         role: 'assistant',
-        content: data.response,
+        content: aiText,
         source_nodes: data.source_nodes || [],
         session_id: data.session_id,
         timestamp: getTimestamp(),
@@ -170,7 +170,11 @@ const Chat = () => {
 
     } catch (err) {
       setIsLoading(false);
-      if (isRateLimitError(err)) setSystemBusy(true);
+      if (isRateLimitError(err)) {
+        setSystemBusy(true);
+      } else {
+        console.error("Chat API Error:", err.message);
+      }
     }
   };
 
@@ -182,6 +186,7 @@ const Chat = () => {
     if (node.CrimeNo) return node.CrimeNo;
     if (node.AccusedMasterID) return `ACC-${node.AccusedMasterID}`;
     if (node.CaseMasterID) return `CASE-${node.CaseMasterID}`;
+    if (node.fir_id) return node.fir_id;
     return node.id || 'Source';
   };
 
@@ -289,6 +294,7 @@ const Chat = () => {
                               onClick={() => {
                                 if (node.CrimeNo) navigate(`/fir/${node.CrimeNo}`);
                                 else if (node.CaseMasterID) navigate(`/fir/${node.CaseMasterID}`);
+                                else if (node.fir_id) navigate(`/fir/${node.fir_id}`);
                               }}
                               title="Click to view FIR details"
                             >

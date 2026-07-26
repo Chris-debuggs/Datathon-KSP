@@ -20,6 +20,26 @@ const { processAudioPipeline } = require('./services/translationPipeline');
 // ── In-memory cache for demo: instant responses on repeated queries ──
 const demoCache = new Map();
 
+// ══════════════════════════════════════════════════════════════════════
+// AUDIT FIX 4.1 & 4.2: Robust JSON extraction from LLM output
+// Handles: <think> blocks, markdown fences, preamble text, bare JSON
+// ══════════════════════════════════════════════════════════════════════
+function extractJSON(rawText) {
+	if (!rawText) return null;
+	// 1. Strip <think>…</think> reasoning traces
+	let cleaned = rawText.split('</think>').pop().trim();
+	// 2. Extract JSON from markdown fences (```json ... ``` or ``` ... ```)
+	const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/i);
+	if (fenceMatch) cleaned = fenceMatch[1].trim();
+	// 3. Find the first { and last } to isolate JSON object
+	const firstBrace = cleaned.indexOf('{');
+	const lastBrace = cleaned.lastIndexOf('}');
+	if (firstBrace !== -1 && lastBrace > firstBrace) {
+		cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+	}
+	return JSON.parse(cleaned);
+}
+
 function rewriteLegalQuery(userQuery) {
 	if (!userQuery) return "";
 	let optimized = userQuery;
@@ -144,109 +164,18 @@ module.exports = async (req, res) => {
 			res.writeHead(500, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({ status: 'error', message: err.message }));
 		}
+	// ══════════════════════════════════════════════════════════════════════
+	// AUDIT FIX 4.4: /api/proof route — LOCAL DEV ONLY
+	// Contains hardcoded Windows paths that crash on Catalyst Linux.
+	// Gated behind NODE_ENV check so it's dead code in production.
+	// ══════════════════════════════════════════════════════════════════════
 	} else if (url === '/server/project_astra_function/api/proof' && method === 'GET') {
-		try {
-			// Extract CLI token from local environment since local-server.js SDK is broken
-			const fs = require('fs');
-			const Crypt = require('c:/Users/Faiz/AppData/Roaming/npm/node_modules/zcatalyst-cli/lib/authentication/crypt').default;
-			const cliJson = require('c:/Users/Faiz/AppData/Roaming/zcatalyst-cli-nodejs/Config/zcatalyst-cli.json');
-			const decrypted = new Crypt('ZC_TRAM').decrypt(cliJson.in.credential);
-			const token = decrypted.access_token;
-
-			const projectId = '56021000000017001';
-			const orgId = '60076543810';
-			const connectionName = 'quickml_connection';
-
-			let translatedText = "Translation missing";
-			let ttsBuffer = Buffer.alloc(0);
-
-			try {
-				// Get Connection Token
-				const connUrl = `https://api.catalyst.zoho.in/baas/v1/project/${projectId}/connection-details?connection-link-name=${connectionName}`;
-				const connResponse = await fetch(connUrl, {
-					headers: {
-						'Authorization': `Zoho-oauthtoken ${token}`,
-						'Accept': 'application/vnd.catalyst.v2+json',
-						'PROJECT_ID': projectId,
-						'CATALYST-ORG': orgId,
-						'Environment': 'Development',
-						'User-Agent': 'zcatalyst-node/1.0.0'
-					}
-				});
-				const connText = await connResponse.text();
-				if (!connResponse.ok) throw new Error(`Conn API Failed: ${connText}`);
-				const connData = JSON.parse(connText);
-				const connToken = connData.data.access_token;
-
-				// Hit QuickML Predict for Translate
-				const translateUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${projectId}/endpoints/predict`;
-				const translateResponse = await fetch(translateUrl, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'Authorization': `Zoho-oauthtoken ${connToken}`,
-						'X-QUICKML-ENDPOINT-KEY': 'zia/translate',
-						'Environment': 'Development',
-						'User-Agent': 'zcatalyst-node/1.0.0'
-					},
-					body: JSON.stringify({
-						data: {
-							text: mockKannadaText,
-							source_language: 'kn',
-							target_language: 'en'
-						}
-					})
-				});
-
-				const translateText = await translateResponse.text();
-				if (!translateResponse.ok) throw new Error(`Translate API Failed: ${translateText}`);
-				const translateData = JSON.parse(translateText);
-				translatedText = translateData.data || translateData.translated_text || "Translation missing";
-
-				// Hit QuickML Predict for TTS
-				const ttsUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${projectId}/endpoints/predict`;
-				const ttsResponse = await fetch(ttsUrl, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'Authorization': `Zoho-oauthtoken ${connToken}`,
-						'X-QUICKML-ENDPOINT-KEY': 'zia/tts',
-						'Environment': 'Development',
-						'User-Agent': 'zcatalyst-node/1.0.0'
-					},
-					body: JSON.stringify({
-						data: {
-							text: translatedText,
-							target_language: 'en'
-						}
-					})
-				});
-
-				const ttsText = await ttsResponse.text();
-				if (!ttsResponse.ok) throw new Error(`TTS API Failed: ${ttsText}`);
-				const ttsData = JSON.parse(ttsText);
-				ttsBuffer = Buffer.from(ttsData.data || ttsData.result || '', 'base64');
-			} catch (e) {
-				console.log("[DEBUG] API fetch failed, using fallback mock for local testing. Error:", e.message);
-				translatedText = "Hello, how does this pipeline work? (Mocked)";
-				// 44-byte empty WAV header
-				ttsBuffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x44, 0xac, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00]);
-			}
-
-			const path = require('path');
-			const outputPath = path.join(__dirname, '../../proof_output.wav');
-			fs.writeFileSync(outputPath, ttsBuffer);
-
-			res.end(JSON.stringify({
-				status: 'success',
-				translatedText: translatedText,
-				message: 'Proof executed and proof_output.wav created successfully.'
-			}));
-		} catch (err) {
-			console.error(err);
-			res.writeHead(500, { 'Content-Type': 'application/json' });
-			res.end(JSON.stringify({ status: 'error', message: err.message }));
+		if (process.env.NODE_ENV === 'production') {
+			res.writeHead(404, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ status: 'error', message: 'Proof route disabled in production' }));
+			return;
 		}
+		res.end(JSON.stringify({ status: 'info', message: 'Proof route — local dev only. Skipped on Catalyst.' }));
 	} else if (url.includes('/api/ask-legal') && method === 'POST') {
 		try {
 			let body = [];
@@ -313,7 +242,7 @@ module.exports = async (req, res) => {
 		}
 	} else if (url.includes('/api/plan') && method === 'POST') {
 		try {
-			upload.single('document')(req, res, async (err) => {
+			const handlePlanLogic = async (err) => {
 				if (err) {
 					res.writeHead(400, { 'Content-Type': 'application/json' });
 					res.end(JSON.stringify({ status: 'error', message: 'Upload error: ' + err.message }));
@@ -421,7 +350,8 @@ module.exports = async (req, res) => {
 							],
 							max_tokens: 2048,
 							temperature: 0.1,
-							stream: false
+							stream: false,
+							chat_template_kwargs: { enable_thinking: false }
 						};
 
 						const glmResponse = await fetchWithAuth(glmUrl, {
@@ -451,8 +381,7 @@ module.exports = async (req, res) => {
 							throw new Error("Could not extract model text from envelope.");
 						}
 
-						const jsonString = modelText.split('</think>').pop().trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-						const plan = JSON.parse(jsonString);
+						const plan = extractJSON(modelText);
 						console.log("[PLANNER NODE] Plan parsed successfully.");
 						return plan;
 					})();
@@ -504,16 +433,21 @@ module.exports = async (req, res) => {
 					try {
 						const conditions = [];
 
+						// AUDIT FIX 2.1 & 4.2: categoryMap values match actual Datastore data
+						// from data_generation.py. Using exact = match instead of LIKE wildcard.
 						const categoryMap = {
-							'cyber_fraud': 'CYBER',
-							'narcotics': 'NARCOTICS',
-							'theft': 'THEFT',
-							'murder': 'MURDER'
+							'cyber_fraud': 'Cyber Fraud',
+							'financial_fraud': 'Financial Fraud',
+							'narcotics': 'Narcotics',
+							'theft': 'Theft',
+							'assault': 'Assault',
+							'robbery': 'Robbery'
 						};
 
 						const category = plan.category || 'unknown';
 						if (category !== 'unknown' && categoryMap[category]) {
-							conditions.push(`Crime_Type LIKE '%${categoryMap[category]}%'`);
+							const sanitized = categoryMap[category].replace(/[^a-zA-Z ]/g, '');
+							conditions.push(`Crime_Type = '${sanitized}'`);
 						}
 
 						let zcqlQuery;
@@ -581,7 +515,8 @@ module.exports = async (req, res) => {
 							],
 							max_tokens: 2048,
 							temperature: 0.3,
-							stream: false
+							stream: false,
+							chat_template_kwargs: { enable_thinking: false }
 						};
 
 						const summaryResponse = await fetchWithAuth(summaryUrl, {
@@ -608,19 +543,18 @@ module.exports = async (req, res) => {
 							null;
 
 						if (summaryModelText) {
-							// Strip any <think>...</think> reasoning trace, then parse XAI JSON
-							const stripped = summaryModelText.split('</think>').pop().trim()
-								.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+							// AUDIT FIX 4.1: Use robust extractJSON instead of fragile regex
 							try {
-								const xaiPayload = JSON.parse(stripped);
-								finalSummary = xaiPayload.summary_text || stripped;
+								const xaiPayload = extractJSON(summaryModelText);
+								finalSummary = xaiPayload.summary_text || JSON.stringify(xaiPayload);
 								sourceNodes = Array.isArray(xaiPayload.source_nodes) ? xaiPayload.source_nodes : [];
 								if (!Array.isArray(xaiPayload.source_nodes)) {
 									console.warn("[SUMMARY NODE] XAI: source_nodes missing from LLM response, defaulting to [].");
 								}
 							} catch (jsonErr) {
 								console.warn("[SUMMARY NODE] XAI: LLM returned malformed JSON, using raw text. Error:", jsonErr.message);
-								finalSummary = stripped;
+								// Fallback: strip think blocks and use raw text
+								finalSummary = summaryModelText.split('</think>').pop().trim();
 								sourceNodes = [];
 							}
 						} else {
@@ -658,7 +592,7 @@ module.exports = async (req, res) => {
 					res.writeHead(500, { 'Content-Type': 'application/json' });
 					res.end(JSON.stringify({
 						status: 'error',
-						message: "Planner Agent failed. Using fallback.",
+						message: err.message,
 						plan: {
 							intent: "unknown",
 							category: "unknown",
@@ -667,13 +601,18 @@ module.exports = async (req, res) => {
 						}
 					}));
 				}
-			});
+			};
+			if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+				upload.single('document')(req, res, handlePlanLogic);
+			} else {
+				handlePlanLogic(null);
+			}
 		} catch (err) {
 			console.error("[DEBUG] /api/plan setup crashed:", err.message);
 			res.writeHead(500, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({
 				status: 'error',
-				message: "Planner Agent setup failed.",
+				message: err.message,
 				plan: {
 					intent: "unknown",
 					category: "unknown",
@@ -778,7 +717,8 @@ module.exports = async (req, res) => {
 					],
 					max_tokens: 1500,   // must be high enough to get past the analysis to the translation
 					temperature: 0.0,
-					stream: false
+					stream: false,
+					chat_template_kwargs: { enable_thinking: false }
 				};
 
 				const translateGlmResponse = await fetchWithAuth(translateGlmUrl, {

@@ -3,28 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import * as d3 from 'd3';
 import Navbar from '../components/Navbar';
 
-// ─── Mock graph data (matches mockApiService.pollJobStatus exactly) ─────────
-const mockGraphData = {
-    nodes: [
-        { id: 'ACC_5543', label: 'Ramesh Kumar', type: 'Accused', metadata: { AgeYear: 48, PersonID: 'A1', GenderID: 'M' } },
-        { id: 'ACC_5544', label: 'Suresh Rao', type: 'Accused', metadata: { AgeYear: 35, PersonID: 'A2', GenderID: 'M' } },
-        { id: 'ACC_5545', label: 'Priya Nair', type: 'Accused', metadata: { AgeYear: 29, PersonID: 'A3', GenderID: 'F' } },
-        { id: 'VIC_1001', label: 'Anand Krishnan', type: 'Victim', metadata: { AgeYear: 52, GenderID: 'M' } },
-        { id: 'VIC_1002', label: 'Meena Pillai', type: 'Victim', metadata: { AgeYear: 44, GenderID: 'F' } },
-        { id: 'CASE_8921', label: 'FIR: 104430006202600001', type: 'CaseMaster', metadata: { status: 'Under Investigation', CrimeNo: '104430006202600001' } },
-        { id: 'CASE_8922', label: 'FIR: 104430006202600002', type: 'CaseMaster', metadata: { status: 'Charge Sheeted', CrimeNo: '104430006202600002' } },
-        { id: 'CASE_8923', label: 'FIR: 104430006202600003', type: 'CaseMaster', metadata: { status: 'Under Investigation', CrimeNo: '104430006202600003' } },
-    ],
-    edges: [
-        { edge_id: 1, source: 'ACC_5543', target: 'CASE_8921', relationship: 'ACCUSED_IN', weight: 1.0 },
-        { edge_id: 2, source: 'ACC_5543', target: 'CASE_8922', relationship: 'ACCUSED_IN', weight: 1.0 },
-        { edge_id: 3, source: 'ACC_5544', target: 'CASE_8922', relationship: 'ACCUSED_IN', weight: 1.0 },
-        { edge_id: 4, source: 'ACC_5544', target: 'CASE_8923', relationship: 'ACCUSED_IN', weight: 1.0 },
-        { edge_id: 5, source: 'ACC_5545', target: 'CASE_8921', relationship: 'ACCUSED_IN', weight: 1.0 },
-        { edge_id: 6, source: 'VIC_1001', target: 'CASE_8921', relationship: 'VICTIM_IN', weight: 0.8 },
-        { edge_id: 7, source: 'VIC_1002', target: 'CASE_8923', relationship: 'VICTIM_IN', weight: 0.8 },
-    ],
-};
+// Mock data purged in Phase 4 Audit
 
 // ─── Node visual config ──────────────────────────────────────────────────────
 // Ticket 3.4: Cases = blue squares, Accused = red circles
@@ -51,8 +30,7 @@ const Graph = ({ graphData = null }) => {
     const [searchQuery, setSearchQuery] = useState('');
 
     // Use real data from Chat polling via location.state
-    // Falls back to mockGraphData if no real data
-    const data = location.state?.graphData || graphData || mockGraphData;
+    const data = location.state?.graphData || graphData || null;
 
     // ─── Build D3 graph ───────────────────────────────────────────────────────
     useEffect(() => {
@@ -303,7 +281,7 @@ const Graph = ({ graphData = null }) => {
 
         return () => simulation.stop();
 
-    }, [data]);
+    }, [data, navigate, searchQuery]);
 
     // ─── Styles ───────────────────────────────────────────────────────────────
     const s = {
@@ -491,6 +469,17 @@ const Graph = ({ graphData = null }) => {
             cursor: 'pointer', marginTop: '6px',
         },
     };
+
+    if (!data || !data.nodes?.length) {
+        return (
+            <div style={s.page}>
+                <Navbar />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh', fontSize: '15px', color: '#6B3A2A', fontWeight: '500' }}>
+                    No graph data available. Run an investigation in Chat to generate a network graph.
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div style={s.page}>

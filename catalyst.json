@@ -3,18 +3,11 @@
     "source": "functions",
     "targets": [
       "project_astra_function",
-      "ksp_datathon_function"
-    ],
-    "ignore": []
+      "ksp_datathon_function",
+      "graph_worker_job"
+    ]
   },
   "client": {
-    "source": "react-app",
-    "plugin": "zcatalyst-cli-plugin-react"
-  },
-  "slate": [
-    {
-      "name": "react-vite",
-      "source": "client"
-    }
-  ]
+    "source": "client/build"
+  }
 }

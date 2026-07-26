@@ -1,7 +1,49 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { BASE_URL } from '../utils/config';
 
 const Login = () => {
   const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleDemoFill = () => {
+    setEmail('investigator@ksp.gov.in');
+    setPassword('datathon2026');
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    if (!email) {
+      setError('Email is required');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    
+    try {
+      const res = await fetch(`${BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data.status === 'success') {
+        localStorage.setItem('astra_user', JSON.stringify(data.data));
+        navigate('/chat');
+      } else {
+        setError(data.message || 'Login failed');
+      }
+    } catch (err) {
+      setError('Network error. Backend may be offline.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const styles = {
     wrap: {
@@ -62,10 +104,21 @@ const Login = () => {
       cursor: 'pointer', letterSpacing: '0.5px',
       marginTop: '8px',
     },
+    demoBtn: {
+      width: '100%', padding: '10px',
+      background: '#FDFAF6', color: '#1A3A5C',
+      border: '1.5px solid #E2D5C3', borderRadius: '8px',
+      fontSize: '13px', fontWeight: '600',
+      cursor: 'pointer', letterSpacing: '0.5px',
+      marginTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
+    },
     footer: {
       textAlign: 'center', fontSize: '12px',
       color: 'rgba(255,255,255,0.45)', marginTop: '20px',
     },
+    error: {
+      color: '#C0392B', fontSize: '12px', marginBottom: '12px', fontWeight: '600'
+    }
   };
 
   return (
@@ -82,27 +135,47 @@ const Login = () => {
         {/* Card */}
         <div style={styles.card}>
           <h2 style={styles.cardTitle}>Sign in to your account</h2>
+          
+          {error && <div style={styles.error}>{error}</div>}
 
-          <label style={styles.label}>Official Email</label>
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="officer@ksp.gov.in"
-          />
+          <form onSubmit={handleLogin}>
+            <label style={styles.label}>Official Email</label>
+            <input
+              style={styles.input}
+              type="email"
+              autoComplete="username"
+              placeholder="Enter your email address (e.g. investigator@gmail.com)"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
 
-          <label style={styles.label}>Password</label>
-          <input
-            style={styles.input}
-            type="password"
-            placeholder="••••••••"
-          />
+            <label style={styles.label}>Password</label>
+            <input
+              style={styles.input}
+              type="password"
+              autoComplete="current-password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
 
-          <button
-            style={styles.btn}
-            onClick={() => navigate('/chat')}
-          >
-            Sign In
-          </button>
+            <button
+              type="submit"
+              style={styles.btn}
+              disabled={loading}
+            >
+              {loading ? 'Authenticating...' : 'Sign In'}
+            </button>
+            
+            <button
+              type="button"
+              style={styles.demoBtn}
+              onClick={handleDemoFill}
+              disabled={loading}
+            >
+              ⚡ Auto-fill Demo Login
+            </button>
+          </form>
         </div>
 
         <p style={styles.footer}>

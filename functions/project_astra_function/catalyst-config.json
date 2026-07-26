@@ -4,7 +4,16 @@
 		"stack": "node24",
 		"type": "advancedio",
 		"env_variables": {
-			"QUICKML_CONNECTION_NAME": "quickml_connection"
+			"QUICKML_CONNECTION_NAME": "quickml_connection",
+			"QUICKML_ORGANIZATION_ID": "60076561329",
+			"QUICKML_PROJECT_ID": "53386000000013049",
+			"QUICKML_STT_ENDPOINT_KEY": "zia/audio/transcribe",
+			"QUICKML_TRANSLATE_ENDPOINT_KEY": "zia/translate",
+			"QUICKML_TTS_ENDPOINT_KEY": "zia/tts/synthesize",
+			"QUICKML_KNOWLEDGE_BASE_ID": "160000000002022",
+			"QUICKML_RAG_ENDPOINT": "https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/rag/answer",
+			"QUICKML_LLM_ENDPOINT": "https://api.catalyst.zoho.in/quickml/v1/project/53386000000013049/llmserving/chat/completions",
+			"QUICKML_DOC_ID": "160000000002022"
 		}
 	},
 	"execution": {
