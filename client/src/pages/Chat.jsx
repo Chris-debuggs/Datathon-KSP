@@ -92,11 +92,25 @@ const Chat = () => {
     // Phase 4 Audit: Mock endpoints removed, now using localStorage for history persistence
     const saved = localStorage.getItem('astra_conversations');
     if (saved) {
-      setConversations(JSON.parse(saved));
+      const parsed = JSON.parse(saved);
+      setConversations(parsed);
+      if (parsed.length > 0) {
+        loadConversation(parsed[0].id);
+      }
     } else {
       setConversations([]);
     }
   }, []);
+
+  const loadConversation = (id) => {
+    setActiveConv(id);
+    const savedChat = localStorage.getItem('astra_chat_' + id);
+    if (savedChat) {
+      setContextHistory(JSON.parse(savedChat));
+    } else {
+      setContextHistory([]);
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -146,6 +160,7 @@ const Chat = () => {
     setSystemBusy(false);
     
     // Auto-save conversation to history if this is the first message
+    let activeId = activeConv;
     if (contextHistory.length === 0) {
       const newId = Date.now();
       const newConv = {
@@ -156,6 +171,7 @@ const Chat = () => {
       const updatedConvs = [newConv, ...conversations];
       setConversations(updatedConvs);
       setActiveConv(newId);
+      activeId = newId;
       localStorage.setItem('astra_conversations', JSON.stringify(updatedConvs));
     }
     
@@ -164,6 +180,7 @@ const Chat = () => {
       { role: 'user', content: userMessage, timestamp: getTimestamp() }
     ];
     setContextHistory(updatedHistory);
+    localStorage.setItem('astra_chat_' + activeId, JSON.stringify(updatedHistory));
     setIsLoading(true);
 
     try {
@@ -179,13 +196,17 @@ const Chat = () => {
 
       const aiText = data.summary || data.response || "No response received.";
       await streamText(aiText);
-      setContextHistory(prev => [...prev, {
-        role: 'assistant',
-        content: aiText,
-        source_nodes: data.source_nodes || [],
-        session_id: data.session_id,
-        timestamp: getTimestamp(),
-      }]);
+      setContextHistory(prev => {
+        const newHist = [...prev, {
+          role: 'assistant',
+          content: aiText,
+          source_nodes: data.source_nodes || [],
+          session_id: data.session_id,
+          timestamp: getTimestamp(),
+        }];
+        localStorage.setItem('astra_chat_' + activeId, JSON.stringify(newHist));
+        return newHist;
+      });
       setStreamedText('');
 
     } catch (err) {
@@ -264,7 +285,7 @@ const Chat = () => {
           {conversations.length === 0
             ? <p style={s.sidebarEmpty}>No previous investigations</p>
             : conversations.map(item => (
-              <div key={item.id} style={s.sidebarItem(item.id === activeConv)} onClick={() => setActiveConv(item.id)}>
+              <div key={item.id} style={s.sidebarItem(item.id === activeConv)} onClick={() => loadConversation(item.id)}>
                 <div style={s.sidebarTitle}>{item.title}</div>
                 <div style={s.sidebarTime}>{item.time}</div>
               </div>
