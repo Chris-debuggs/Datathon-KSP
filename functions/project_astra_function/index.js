@@ -40,6 +40,36 @@ function extractJSON(rawText) {
 	return JSON.parse(cleaned);
 }
 
+const KANNADA_RE = /[\u0C80-\u0CFF]/;
+
+// Pull the English sentence out of the translation LLM's reply.
+// Prefers the {"english": "..."} JSON we ask for; falls back to the last
+// Kannada-free line, then to the whole reply with Kannada stripped.
+function extractTranslation(modelText) {
+	try {
+		const parsed = extractJSON(modelText);
+		if (parsed && typeof parsed.english === 'string' && parsed.english.trim()) {
+			return parsed.english.trim();
+		}
+	} catch (e) { /* not JSON — fall through */ }
+
+	const afterThink = modelText.split('</think>').pop().trim();
+	const LABEL_RE = /^(translation|english|output|result)\s*:\s*$/i;
+	const lines = afterThink.split('\n').map(l => l.trim()).filter(Boolean);
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i];
+		if (!KANNADA_RE.test(line) && !LABEL_RE.test(line) && line.length > 10) {
+			return line
+				.replace(/\*\*(.+?)\*\*/g, '$1')
+				.replace(/\*(.+?)\*/g, '$1')
+				.replace(/^["']|["']$/g, '')
+				.trim();
+		}
+	}
+	return afterThink.replace(/[\u0C80-\u0CFF]/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+
 function rewriteLegalQuery(userQuery) {
 	if (!userQuery) return "";
 	let optimized = userQuery;
@@ -679,109 +709,66 @@ module.exports = async (req, res) => {
 				console.log(`[VOICE NODE] STT result: "${sttResult.substring(0, 80)}..."`);
 
 				// ── CALL 2: Translation via LLM (Kannada text → English text) ──
-				// This model always emits a word-by-word breakdown first, then the
-				// clean English sentence last.  We let the full response through
-				// (max_tokens 1500) and then extract the last Kannada-free line.
-				console.log('[VOICE NODE] Step 2: Translating Kannada → English via GLM...');
-				const translateGlmUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
-				const translatePayload = {
-					model: "crm-di-glm47b_30b_it",
-					messages: [
-						{
-							role: "system",
-							content: "You are a Kannada-to-English translation API. For every user message you receive a Kannada sentence. Reply with the English translation and nothing else."
+				// Skipped when the officer spoke English: STT already returned English,
+				// and sending it through would translate it INTO Kannada.
+				let englishTranslation = sttResult;
+				if (KANNADA_RE.test(sttResult)) {
+					console.log('[VOICE NODE] Step 2: Translating Kannada → English via GLM...');
+					const translateGlmUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
+					const translatePayload = {
+						model: "crm-di-glm47b_30b_it",
+						messages: [
+							{
+								role: "system",
+								content:
+									"You translate Kannada police complaints into English. " +
+									"The input comes from speech recognition, so words may be misheard, misspelled or merged together — " +
+									"infer the most likely intended meaning from context (theft, fraud, bank, money, assault, etc.). " +
+									"Keep numbers, amounts and names accurate. " +
+									"Respond with ONLY a JSON object: {\"english\": \"<translation>\"}. No explanations."
+							},
+							// ── few-shot examples ──
+							{ role: "user", content: "ನನ್ನ ಮನೆ ಬೆಂಗಳೂರಿನಲ್ಲಿದೆ" },
+							{ role: "assistant", content: "{\"english\": \"My house is in Bengaluru.\"}" },
+							{ role: "user", content: "ನನ್ನ ಮೊಬೈಲ್ ಫೋನ್ ಬಸ್ಸಿನಲ್ಲಿ ಕಳುವಾಗಿದೆ" },
+							{ role: "assistant", content: "{\"english\": \"My mobile phone was stolen on the bus.\"}" },
+							// ── real request ──
+							{ role: "user", content: sttResult }
+						],
+						max_tokens: 512,
+						temperature: 0.0,
+						stream: false,
+						chat_template_kwargs: { enable_thinking: false }
+					};
+
+					const translateGlmResponse = await fetchWithAuth(translateGlmUrl, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							'CATALYST-ORG': process.env.CATALYST_ORG_ID,
+							'Authorization': authHeader
 						},
-						// ── few-shot example 1 ──
-						{
-							role: "user",
-							content: "ನನ್ನ ಮನೆ ಬೆಂಗಳೂರಿನಲ್ಲಿದೆ"
-						},
-						{
-							role: "assistant",
-							content: "My house is in Bengaluru."
-						},
-						// ── few-shot example 2 ──
-						{
-							role: "user",
-							content: "ಅವರು ನಿನ್ನೆ ಬಂದರು"
-						},
-						{
-							role: "assistant",
-							content: "They came yesterday."
-						},
-						// ── real request ──
-						{
-							role: "user",
-							content: sttResult
-						}
-					],
-					max_tokens: 1500,   // must be high enough to get past the analysis to the translation
-					temperature: 0.0,
-					stream: false,
-					chat_template_kwargs: { enable_thinking: false }
-				};
+						body: JSON.stringify(translatePayload)
+					});
 
-				const translateGlmResponse = await fetchWithAuth(translateGlmUrl, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'CATALYST-ORG': process.env.CATALYST_ORG_ID,
-						'Authorization': authHeader
-					},
-					body: JSON.stringify(translatePayload)
-				});
-
-				const translateRawText = await translateGlmResponse.text();
-				if (!translateGlmResponse.ok) {
-					throw new Error(`Translation GLM API failed (${translateGlmResponse.status}): ${translateRawText}`);
-				}
-
-				const translateGlmData = JSON.parse(translateRawText);
-				const translateModelText =
-					translateGlmData?.choices?.[0]?.message?.content ??
-					translateGlmData?.output ??
-					translateGlmData?.result ??
-					translateGlmData?.response ??
-					null;
-
-				if (!translateModelText) {
-					throw new Error(`Translation GLM returned no content. Raw: ${translateRawText}`);
-				}
-
-				// ── Extraction strategy ──────────────────────────────────────────
-				// The model emits: analysis (contains Kannada chars) → English sentence (no Kannada chars).
-				// We walk lines from the bottom and take the first line that:
-				//   • has no Kannada Unicode characters (U+0C80–U+0CFF)
-				//   • is not just a label like "Translation:" or "English:"
-				//   • has more than 10 characters (avoids stray punctuation lines)
-				const KANNADA_RE = /[\u0C80-\u0CFF]/;
-				const LABEL_RE = /^(translation|english|output|result)\s*:\s*$/i;
-
-				// 1. Strip <think>…</think> blocks emitted by reasoning models
-				const afterThink = translateModelText.split('</think>').pop().trim();
-
-				// 2. Walk lines bottom-up for the last clean English line
-				const allLines = afterThink.split('\n').map(l => l.trim()).filter(Boolean);
-				let englishTranslation = '';
-				for (let i = allLines.length - 1; i >= 0; i--) {
-					const line = allLines[i];
-					if (!KANNADA_RE.test(line) && !LABEL_RE.test(line) && line.length > 10) {
-						// Strip any surrounding markdown bold/italic/quotes
-						englishTranslation = line
-							.replace(/\*\*(.+?)\*\*/g, '$1')
-							.replace(/\*(.+?)\*/g, '$1')
-							.replace(/^["']|["']$/g, '')
-							.trim();
-						break;
+					const translateRawText = await translateGlmResponse.text();
+					if (!translateGlmResponse.ok) {
+						throw new Error(`Translation GLM API failed (${translateGlmResponse.status}): ${translateRawText}`);
 					}
-				}
 
-				// 3. Fallback: strip Kannada chars and return whatever English remains
-				if (!englishTranslation) {
-					englishTranslation = afterThink
-						.replace(KANNADA_RE, '')
-						.replace(/\s{2,}/g, ' ')
-						.trim();
+					const translateGlmData = JSON.parse(translateRawText);
+					const translateModelText =
+						translateGlmData?.choices?.[0]?.message?.content ??
+						translateGlmData?.output ??
+						translateGlmData?.result ??
+						translateGlmData?.response ??
+						null;
+
+					if (!translateModelText) {
+						throw new Error(`Translation GLM returned no content. Raw: ${translateRawText}`);
+					}
+
+					englishTranslation = extractTranslation(translateModelText);
 				}
 
 				console.log(`[VOICE NODE] Translation: "${englishTranslation.substring(0, 80)}..."`);
@@ -807,3 +794,4 @@ module.exports = async (req, res) => {
 		}));
 	}
 };
+module.exports.extractTranslation = extractTranslation;

@@ -55,6 +55,29 @@ const pollJobStatus = (jobId, attempt = 1, onComplete, onError) => {
   }, delay);
 };
 
+// ─── Voice input: browser recording → 16 kHz mono WAV ──────────────────────
+// MediaRecorder emits webm/ogg/mp4 depending on the browser; QuickML STT reliably accepts WAV.
+const toWav16k = async (blob) => {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const rate = 16000;
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const pcm = (await offline.startRendering()).getChannelData(0);
+  const view = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); view.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  str(36, 'data'); view.setUint32(40, pcm.length * 2, true);
+  pcm.forEach((v, i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 0x7fff, true));
+  return new Blob([view], { type: 'audio/wav' });
+};
+
 // ─── Animated loading dots ──────────────────────────────────────────────────
 const LoadingDots = () => {
   const [dots, setDots] = useState(1);
@@ -82,6 +105,9 @@ const Chat = () => {
   const [activeConv, setActiveConv] = useState(1);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
+  const recorderRef = useRef(null);
   const [isPolling, setIsPolling] = useState(false);
   const [pollingMessage, setPollingMessage] = useState('');
 
@@ -134,7 +160,52 @@ const Chat = () => {
     });
   };
 
-  const handleMic = () => setIsRecording(prev => !prev);
+  // Release the mic if the officer leaves the page mid-recording
+  useEffect(() => () => {
+    const r = recorderRef.current;
+    if (r) { r.onstop = null; r.stream.getTracks().forEach(t => t.stop()); }
+  }, []);
+
+  // ─── Ticket 2.2: Voice input — record, send to /api/voice, fill the input ──
+  const handleMic = async () => {
+    if (isRecording) { recorderRef.current?.stop(); return; }
+    setVoiceError('');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      setVoiceError('Microphone access blocked. Allow mic permission in your browser and try again.');
+      return;
+    }
+    const chunks = [];
+    const recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      setIsRecording(false);
+      setIsTranscribing(true);
+      try {
+        const form = new FormData();
+        form.append('audio', await toWav16k(new Blob(chunks, { type: recorder.mimeType })), 'voice.wav');
+        // Plain fetch, not apiFetch: apiFetch forces a JSON Content-Type, which breaks multipart uploads
+        const res = await fetch(`${ASTRA_BASE_URL}/api/voice`, { method: 'POST', body: form });
+        if (res.status === 429 || res.status === 504) { setSystemBusy(true); return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.translation) throw new Error(data.message || `Voice API error: ${res.status}`);
+        setInputValue(data.translation.slice(0, charLimit));
+      } catch (err) {
+        console.error('Voice API Error:', err.message);
+        setVoiceError("Couldn't process the recording. Please try again or type your query.");
+      } finally {
+        setIsTranscribing(false);
+      }
+    };
+    recorderRef.current = recorder;
+    recorder.start();
+    setIsRecording(true);
+    // Catalyst gateway drops requests at ~30s, so cap recordings well below that
+    setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 20000);
+  };
 
   const handleAsyncJob = (jobId) => {
     setIsPolling(true);
@@ -268,7 +339,8 @@ const Chat = () => {
     inputBar: { background: '#fff', borderTop: '2px solid #E2D5C3', padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: '8px' },
     inputRow: { display: 'flex', alignItems: 'center', gap: '10px' },
     input: { flex: 1, padding: '10px 14px', border: '1.5px solid #E2D5C3', borderRadius: '8px', fontSize: '14px', color: '#1A3A5C', outline: 'none', background: '#FDFAF6' },
-    inputMeta: { display: 'flex', justifyContent: 'flex-end' },
+    inputMeta: { display: 'flex', justifyContent: 'space-between' },
+    voiceStatus: (err) => ({ fontSize: '11px', color: err ? '#C0392B' : '#6B3A2A', fontWeight: '500' }),
     charCount: (over) => ({ fontSize: '11px', color: over ? '#C0392B' : '#A0896B', fontWeight: over ? '600' : '400' }),
     micBtn: (rec) => ({ width: '40px', height: '40px', borderRadius: '50%', border: `1.5px solid ${rec ? '#C0392B' : '#E2D5C3'}`, background: rec ? '#FDECEA' : '#FDFAF6', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '17px' }),
     sendBtn: (disabled) => ({ width: '40px', height: '40px', borderRadius: '50%', border: 'none', background: disabled ? '#E2D5C3' : '#C0392B', cursor: disabled ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '15px' }),
@@ -393,14 +465,18 @@ const Chat = () => {
                 onKeyDown={handleKeyDown}
                 disabled={isBusy}
               />
-              <button style={s.micBtn(isRecording)} onClick={handleMic}>
-                {isRecording ? '⏹️' : '🎤'}
+              <button style={s.micBtn(isRecording)} onClick={handleMic} disabled={isBusy || isTranscribing}
+                title={isRecording ? 'Stop recording' : 'Speak your query (Kannada or English)'}>
+                {isTranscribing ? '⏳' : isRecording ? '⏹️' : '🎤'}
               </button>
               <button style={s.sendBtn(isBusy || !inputValue.trim())} onClick={handleSend} disabled={isBusy || !inputValue.trim()}>
                 ➤
               </button>
             </div>
             <div style={s.inputMeta}>
+              <span style={s.voiceStatus(!!voiceError)}>
+                {isRecording ? '● Listening… click ⏹️ to stop' : isTranscribing ? 'Transcribing voice…' : voiceError}
+              </span>
               <span style={s.charCount(charCount > charLimit * 0.9)}>{charCount}/{charLimit}</span>
             </div>
           </div>
