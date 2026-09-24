@@ -107,6 +107,7 @@ const Chat = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState('');
+  const [voiceHeard, setVoiceHeard] = useState('');
   const recorderRef = useRef(null);
   const [isPolling, setIsPolling] = useState(false);
   const [pollingMessage, setPollingMessage] = useState('');
@@ -170,6 +171,7 @@ const Chat = () => {
   const handleMic = async () => {
     if (isRecording) { recorderRef.current?.stop(); return; }
     setVoiceError('');
+    setVoiceHeard('');
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -189,7 +191,7 @@ const Chat = () => {
         form.append('audio', await toWav16k(new Blob(chunks, { type: recorder.mimeType })), 'voice.wav');
         // Plain fetch, not apiFetch: apiFetch forces a JSON Content-Type, which breaks multipart uploads
         const res = await fetch(`${ASTRA_BASE_URL}/api/voice`, { method: 'POST', body: form });
-        if (res.status === 429 || res.status === 504) { setSystemBusy(true); return; }
+        if (res.status === 429 || res.status === 504 || res.status === 408) { setSystemBusy(true); return; }
         const data = await res.json().catch(() => ({}));
         // Spoken English comes back from STT already in English — use it as-is;
         // only Kannada (or mixed) speech needs the translation.
@@ -197,6 +199,8 @@ const Chat = () => {
         const text = /[\u0C80-\u0CFF]/.test(transcript) ? data.translation : (transcript || data.translation);
         if (!res.ok || !text) throw new Error(data.message || `Voice API error: ${res.status}`);
         setInputValue(text.slice(0, charLimit));
+        // The translation model can garble Kannada number words — show what was heard so the officer can check amounts
+        if (text !== transcript) setVoiceHeard(transcript);
       } catch (err) {
         console.error('Voice API Error:', err.message);
         setVoiceError("Couldn't process the recording. Please try again or type your query.");
@@ -232,6 +236,7 @@ const Chat = () => {
     if (!inputValue.trim() || isLoading || isStreaming || isPolling) return;
     const userMessage = inputValue.trim();
     setInputValue('');
+    setVoiceHeard('');
     setSystemBusy(false);
     
     // Auto-save conversation to history if this is the first message
@@ -330,7 +335,7 @@ const Chat = () => {
     officerBubble: { background: '#6B3A2A', color: '#fff', borderRadius: '14px 14px 2px 14px', padding: '12px 16px', maxWidth: '480px', fontSize: '14px', lineHeight: '1.5' },
     timestamp: { fontSize: '10px', color: '#A0896B', marginTop: '4px' },
     aiMsgWrap: { maxWidth: '680px', marginBottom: '16px' },
-    aiBubble: { background: '#fff', border: '1px solid #E2D5C3', borderLeft: '4px solid #C0392B', borderRadius: '2px 14px 14px 14px', padding: '14px 16px', fontSize: '14px', color: '#1A3A5C', lineHeight: '1.6' },
+    aiBubble: { background: '#fff', border: '1px solid #E2D5C3', borderLeft: '4px solid #C0392B', borderRadius: '2px 14px 14px 14px', padding: '14px 16px', fontSize: '14px', color: '#1A3A5C', lineHeight: '1.6', whiteSpace: 'pre-wrap' },
     aiFooter: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px' },
     xaiRow: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' },
     xaiTag: { fontSize: '11px', fontWeight: '600', color: '#1A3A5C', background: '#FEF9E7', border: '1px solid #E8C547', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer' },
@@ -479,7 +484,7 @@ const Chat = () => {
             </div>
             <div style={s.inputMeta}>
               <span style={s.voiceStatus(!!voiceError)}>
-                {isRecording ? '● Listening… click ⏹️ to stop' : isTranscribing ? 'Transcribing voice…' : voiceError}
+                {isRecording ? '● Listening… click ⏹️ to stop' : isTranscribing ? 'Transcribing voice…' : voiceError || (voiceHeard && `Heard: ${voiceHeard} — check amounts and names before sending`)}
               </span>
               <span style={s.charCount(charCount > charLimit * 0.9)}>{charCount}/{charLimit}</span>
             </div>

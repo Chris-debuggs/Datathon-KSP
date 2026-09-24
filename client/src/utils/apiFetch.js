@@ -28,7 +28,8 @@ export const apiFetch = async (url, options = {}) => {
     });
 
     // Ticket 4.2: catch HTTP 429 (rate limit) and 504 (timeout)
-    if (res.status === 429 || res.status === 504) {
+    // 408 = Catalyst gateway dropped a request that ran past ~30s
+    if (res.status === 429 || res.status === 504 || res.status === 408) {
       throw new RateLimitError(res.status);
     }
 

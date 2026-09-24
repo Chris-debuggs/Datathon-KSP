@@ -20,6 +20,10 @@ const { processAudioPipeline } = require('./services/translationPipeline');
 // ── In-memory cache for demo: instant responses on repeated queries ──
 const demoCache = new Map();
 
+// Catalyst's API gateway drops requests at ~30s. The summary LLM call must finish
+// within this many ms of the circuit starting, else we return a grounded fallback.
+const SUMMARY_DEADLINE_MS = 24000;
+
 // ══════════════════════════════════════════════════════════════════════
 // AUDIT FIX 4.1 & 4.2: Robust JSON extraction from LLM output
 // Handles: <think> blocks, markdown fences, preamble text, bare JSON
@@ -82,7 +86,7 @@ function rewriteLegalQuery(userQuery) {
 	return optimized;
 }
 
-async function refreshZohoToken() {
+async function requestNewZohoToken() {
 	const url = "https://accounts.zoho.in/oauth/v2/token";
 	const params = new URLSearchParams();
 	params.append('grant_type', 'refresh_token');
@@ -107,6 +111,14 @@ async function refreshZohoToken() {
 	} else {
 		throw new Error('Refresh response missing access_token');
 	}
+}
+
+// Zoho allows only ~10 token refreshes per 10 minutes per refresh token. Planner + RAG
+// hit 401 at the same moment on a cold start, so concurrent callers share one refresh.
+let refreshInFlight = null;
+function refreshZohoToken() {
+	refreshInFlight ??= requestNewZohoToken().finally(() => { refreshInFlight = null; });
+	return refreshInFlight;
 }
 
 async function fetchWithAuth(url, options = {}) {
@@ -359,7 +371,7 @@ module.exports = async (req, res) => {
 										"Required JSON schema — output this object and NOTHING else:\n" +
 										"{\n" +
 										"  \"intent\": \"search\",\n" +
-										"  \"category\": \"cyber_fraud\",\n" +
+										"  \"category\": \"<one of: cyber_fraud, financial_fraud, narcotics, theft, assault, robbery, unknown>\",\n" +
 										"  \"keywords\": [\"extracted\", \"terms\"],\n" +
 										"  \"entities\": {\n" +
 										"    \"fir_no\": null,\n" +
@@ -370,7 +382,7 @@ module.exports = async (req, res) => {
 										"    \"bank_account\": null,\n" +
 										"    \"aadhaar\": null,\n" +
 										"    \"address\": null,\n" +
-										"    \"crime_type\": \"cyber_fraud\",\n" +
+										"    \"crime_type\": \"<same value as category>\",\n" +
 										"    \"police_station\": null,\n" +
 										"    \"district\": null\n" +
 										"  }\n" +
@@ -460,6 +472,7 @@ module.exports = async (req, res) => {
 
 					// ── NODE 2: DATABASE SEARCH — Query CaseMaster via ZCQL ──
 					let dbResults = [];
+					let categoryFiltered = false;
 					try {
 						const conditions = [];
 
@@ -478,6 +491,7 @@ module.exports = async (req, res) => {
 						if (category !== 'unknown' && categoryMap[category]) {
 							const sanitized = categoryMap[category].replace(/[^a-zA-Z ]/g, '');
 							conditions.push(`Crime_Type = '${sanitized}'`);
+							categoryFiltered = true;
 						}
 
 						let zcqlQuery;
@@ -502,16 +516,40 @@ module.exports = async (req, res) => {
 					}
 
 					// ── NODE 4: SUMMARY — Synthesize final answer via GLM (XAI-compliant) ──
-					let finalSummary = "Summary generation unavailable.";
-					let sourceNodes = [];
+					// XAI lineage is built in code from the rows the DB actually returned, so every
+					// cited case is real. The LLM only writes a short briefing: asking it to also emit
+					// per-case JSON took ~30s and tripped the ~30s Catalyst gateway timeout (HTTP 408).
+					const citedRows = categoryFiltered ? dbResults.slice(0, 5) : [];
+					const sourceNodes = citedRows.map(row => ({
+						CrimeNo: row.CrimeNo,
+						CaseMasterID: row.CaseMasterID,
+						fir_id: row.CrimeNo || row.CaseMasterID,
+						reason: `${row.Crime_Type} case matching query category "${plan.category}" (status: ${row.Status})`,
+						confidence_score: 1.0
+					}));
+					const statusCounts = {};
+					citedRows.length && dbResults.forEach(r => { statusCounts[r.Status] = (statusCounts[r.Status] || 0) + 1; });
+					const statusLine = Object.entries(statusCounts).map(([s, n]) => `${s}: ${n}`).join(', ');
+					const dbContext = citedRows.length
+						? `${dbResults.length} matching record(s) (status breakdown: ${statusLine}). Top cases:\n` +
+							citedRows.map(r => `- CrimeNo ${r.CrimeNo}: ${r.Crime_Type}, ${r.Status}`).join('\n')
+						: `No case records matched the query category "${plan.category}".`;
+
+					// Used when the model is too slow or fails — still a useful, grounded answer
+					const buildFallbackSummary = () =>
+						`## Situation Overview\n${citedRows.length ? `${dbResults.length} matching record(s) found (${statusLine}).` : dbContext}\n\n` +
+						(citedRows.length ? `## Relevant Cases\n${citedRows.map(r => `- CrimeNo ${r.CrimeNo} — ${r.Status}`).join('\n')}\n\n` : '') +
+						`## Applicable Guidelines\n${ragAnswer}\n\n` +
+						`## Recommended Next Steps\nReview the cited cases, and add a name, phone number, UPI ID or vehicle number to narrow the search.`;
+
+					let finalSummary;
+					let summaryFromModel = false;
+					const remainingMs = SUMMARY_DEADLINE_MS - (Date.now() - circuitStart);
 					try {
-						console.log("[SUMMARY NODE] Generating final synthesis...");
+						if (remainingMs < 3000) throw new Error(`only ${remainingMs}ms left before gateway timeout`);
+						console.log(`[SUMMARY NODE] Generating final synthesis (budget ${remainingMs}ms)...`);
 
 						const summaryUrl = `https://api.catalyst.zoho.in/quickml/v1/project/${process.env.QUICKML_PROJECT_ID}/glm/chat`;
-						const dbContext = dbResults.length > 0
-							? `Database returned ${dbResults.length} matching case record(s):\n${JSON.stringify(dbResults.slice(0, 10), null, 2)}`
-							: `Database returned 0 records (local sandbox restriction — in production, CaseMaster records matching category "${plan.category}" will populate here).`;
-
 						const summaryPayload = {
 							model: "crm-di-glm47b_30b_it",
 							messages: [
@@ -519,19 +557,12 @@ module.exports = async (req, res) => {
 									role: "system",
 									content:
 										"You are a senior law enforcement intelligence assistant for the Karnataka State Police. " +
-										"Synthesize database records and police manual guidelines into a concise, actionable intelligence briefing. " +
-										"You MUST respond with a single valid JSON object and nothing else — no markdown fences, no preamble, no explanations. " +
-										"The JSON object MUST strictly follow this schema:\n" +
-										"{\n" +
-										"  \"summary_text\": \"<Markdown string with sections: (1) Situation Overview, (2) Relevant Cases Found, (3) Applicable Guidelines & SOPs, (4) Recommended Next Steps>\",\n" +
-										"  \"source_nodes\": [\n" +
-										"    { \"fir_id\": \"<CrimeNo or CaseMasterID from the database records>\", \"reason\": \"<Brief justification>\", \"confidence_score\": \"<A percentage between 0% and 100%>\" }\n" +
-										"  ]\n" +
-										"}\n" +
-										"Rules:\n" +
-										"- Only cite case IDs that exist in the Database Results provided. Do NOT hallucinate case numbers.\n" +
-										"- If no database records exist, set source_nodes to an empty array [].\n" +
-										"- Be direct and professional. Start your response with { and end with }."
+										"Write a concise, actionable intelligence briefing in Markdown with exactly these sections: " +
+										"## Situation Overview, ## Relevant Cases, ## Applicable Guidelines, ## Recommended Next Steps. " +
+										"Keep the whole briefing under 150 words. " +
+										"Cite cases only by the CrimeNo values given in the Database Results — never invent case numbers. " +
+										"If the guidelines say no information is available, say so in one line. " +
+										"Output only the briefing."
 								},
 								{
 									role: "user",
@@ -539,11 +570,10 @@ module.exports = async (req, res) => {
 										historyContext +
 										`Original Query: ${userQuery}\n\n` +
 										`── Database Results ──\n${dbContext}\n\n` +
-										`── Police Manual / RAG Guidelines ──\n${ragAnswer}\n\n` +
-										"Synthesize the above into the required JSON object. Remember: output ONLY the JSON object, start with { and end with }."
+										`── Police Manual / RAG Guidelines ──\n${ragAnswer}`
 								}
 							],
-							max_tokens: 2048,
+							max_tokens: 450,
 							temperature: 0.3,
 							stream: false,
 							chat_template_kwargs: { enable_thinking: false }
@@ -556,7 +586,8 @@ module.exports = async (req, res) => {
 								"CATALYST-ORG": process.env.CATALYST_ORG_ID,
 								"Authorization": `Zoho-oauthtoken ${process.env.QUICKML_OAUTH_TOKEN}`
 							},
-							body: JSON.stringify(summaryPayload)
+							body: JSON.stringify(summaryPayload),
+							signal: AbortSignal.timeout(remainingMs)
 						});
 
 						const summaryRawText = await summaryResponse.text();
@@ -572,32 +603,19 @@ module.exports = async (req, res) => {
 							summaryData?.response ??
 							null;
 
-						if (summaryModelText) {
-							// AUDIT FIX 4.1: Use robust extractJSON instead of fragile regex
-							try {
-								const xaiPayload = extractJSON(summaryModelText);
-								finalSummary = xaiPayload.summary_text || JSON.stringify(xaiPayload);
-								sourceNodes = Array.isArray(xaiPayload.source_nodes) ? xaiPayload.source_nodes : [];
-								if (!Array.isArray(xaiPayload.source_nodes)) {
-									console.warn("[SUMMARY NODE] XAI: source_nodes missing from LLM response, defaulting to [].");
-								}
-							} catch (jsonErr) {
-								console.warn("[SUMMARY NODE] XAI: LLM returned malformed JSON, using raw text. Error:", jsonErr.message);
-								// Fallback: strip think blocks and use raw text
-								finalSummary = summaryModelText.split('</think>').pop().trim();
-								sourceNodes = [];
-							}
-						} else {
-							finalSummary = "Summary model returned an empty response.";
-							sourceNodes = [];
-						}
+						const briefing = String(summaryModelText || '')
+							.split('</think>').pop()
+							.replace(/^\s*```(?:markdown)?\s*|\s*```\s*$/g, '')
+							.trim();
+						if (!briefing) throw new Error('Summary model returned an empty response');
 
-						console.log("[SUMMARY NODE] Synthesis complete.");
+						finalSummary = briefing;
+						summaryFromModel = true;
+						console.log(`[SUMMARY NODE] Synthesis complete in ${Date.now() - circuitStart}ms since circuit start.`);
 
 					} catch (sumErr) {
-						console.error("[SUMMARY NODE] Summary generation failed:", sumErr.message);
-						finalSummary = "Summary generation failed. Please review the raw plan and database results above.";
-						sourceNodes = [];
+						console.error("[SUMMARY NODE] Falling back to grounded summary:", sumErr.message);
+						finalSummary = buildFallbackSummary();
 					}
 
 					// ── Build final payload, cache it, and return ──
@@ -611,7 +629,8 @@ module.exports = async (req, res) => {
 						source_nodes: sourceNodes
 					};
 
-					demoCache.set(userQuery, finalPayload);
+					// Only cache full model answers, so a slow moment doesn't pin the fallback
+					if (summaryFromModel) demoCache.set(userQuery, finalPayload);
 					console.log(`[CIRCUIT COMPLETE] Total wall time: ${Date.now() - circuitStart}ms | Cache size: ${demoCache.size}`);
 
 					res.writeHead(200, { 'Content-Type': 'application/json' });
