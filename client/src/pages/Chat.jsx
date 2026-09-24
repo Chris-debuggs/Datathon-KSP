@@ -191,8 +191,12 @@ const Chat = () => {
         const res = await fetch(`${ASTRA_BASE_URL}/api/voice`, { method: 'POST', body: form });
         if (res.status === 429 || res.status === 504) { setSystemBusy(true); return; }
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.translation) throw new Error(data.message || `Voice API error: ${res.status}`);
-        setInputValue(data.translation.slice(0, charLimit));
+        // Spoken English comes back from STT already in English — use it as-is;
+        // only Kannada (or mixed) speech needs the translation.
+        const transcript = data.transcription || '';
+        const text = /[\u0C80-\u0CFF]/.test(transcript) ? data.translation : (transcript || data.translation);
+        if (!res.ok || !text) throw new Error(data.message || `Voice API error: ${res.status}`);
+        setInputValue(text.slice(0, charLimit));
       } catch (err) {
         console.error('Voice API Error:', err.message);
         setVoiceError("Couldn't process the recording. Please try again or type your query.");
