@@ -21,7 +21,7 @@ const { processAudioPipeline } = require('./services/translationPipeline');
 const demoCache = new Map();
 
 // Catalyst's API gateway drops requests at ~30s. The summary LLM call must finish
-// within this many ms of the circuit starting, else we return a grounded fallback.
+// within this many ms of the request arriving, else we return a grounded fallback.
 const SUMMARY_DEADLINE_MS = 24000;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -97,7 +97,9 @@ async function requestNewZohoToken() {
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: params.toString()
+		body: params.toString(),
+		// A hung refresh would otherwise pin refreshInFlight and stall every later 401 on this instance
+		signal: AbortSignal.timeout(10000)
 	});
 
 	if (!response.ok) {
@@ -121,11 +123,22 @@ function refreshZohoToken() {
 	return refreshInFlight;
 }
 
+function rejectOnAbort(signal) {
+	return new Promise((_, reject) => {
+		if (signal.aborted) return reject(signal.reason);
+		signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+	});
+}
+
 async function fetchWithAuth(url, options = {}) {
 	let response = await fetch(url, options);
 	if (response.status === 401) {
 		console.log("[AUTH] Token expired, refreshing...");
-		const newToken = await refreshZohoToken();
+		// A deadline-bound caller (the summary node) stops waiting when its own signal fires;
+		// the shared refresh keeps going for everyone else.
+		const newToken = await (options.signal
+			? Promise.race([refreshZohoToken(), rejectOnAbort(options.signal)])
+			: refreshZohoToken());
 		
 		if (options.headers) {
 			options.headers['Authorization'] = `Zoho-oauthtoken ${newToken}`;
@@ -283,6 +296,7 @@ module.exports = async (req, res) => {
 			res.end(JSON.stringify({ error: "Our legal AI is currently overwhelmed, please try again in a moment." }));
 		}
 	} else if (url.includes('/api/plan') && method === 'POST') {
+		const requestStart = Date.now();
 		try {
 			const handlePlanLogic = async (err) => {
 				if (err) {
@@ -494,21 +508,21 @@ module.exports = async (req, res) => {
 							categoryFiltered = true;
 						}
 
-						let zcqlQuery;
+						// No category → nothing to search on. An unfiltered LIMIT 10 returned
+						// arbitrary rows that the summary then couldn't honestly cite.
 						if (conditions.length > 0) {
-							zcqlQuery = `SELECT ROWID, CrimeNo, CaseMasterID, UnitID, Crime_Type, Status FROM CaseMaster WHERE ${conditions.join(' AND ')} LIMIT 25`;
+							const zcqlQuery = `SELECT ROWID, CrimeNo, CaseMasterID, UnitID, Crime_Type, Status FROM CaseMaster WHERE ${conditions.join(' AND ')} LIMIT 25`;
+							console.log("[SEARCH NODE] ZCQL:", zcqlQuery);
+
+							const zcql = catalystApp.zcql();
+							const queryResult = await zcql.executeZCQLQuery(zcqlQuery);
+
+							dbResults = queryResult.map(row => row.CaseMaster || row);
+
+							console.log(`[SEARCH NODE] Returned ${dbResults.length} record(s)`);
 						} else {
-							zcqlQuery = `SELECT ROWID, CrimeNo, CaseMasterID, UnitID, Crime_Type, Status FROM CaseMaster LIMIT 10`;
+							console.log(`[SEARCH NODE] Skipped: category "${category}" has no Datastore mapping`);
 						}
-
-						console.log("[SEARCH NODE] ZCQL:", zcqlQuery);
-
-						const zcql = catalystApp.zcql();
-						const queryResult = await zcql.executeZCQLQuery(zcqlQuery);
-
-						dbResults = queryResult.map(row => row.CaseMaster || row);
-
-						console.log(`[SEARCH NODE] Returned ${dbResults.length} record(s)`);
 
 					} catch (dbErr) {
 						console.error("[SEARCH NODE] DB query failed:", dbErr.message);
@@ -519,7 +533,7 @@ module.exports = async (req, res) => {
 					// XAI lineage is built in code from the rows the DB actually returned, so every
 					// cited case is real. The LLM only writes a short briefing: asking it to also emit
 					// per-case JSON took ~30s and tripped the ~30s Catalyst gateway timeout (HTTP 408).
-					const citedRows = categoryFiltered ? dbResults.slice(0, 5) : [];
+					const citedRows = dbResults.slice(0, 5);
 					const sourceNodes = citedRows.map(row => ({
 						CrimeNo: row.CrimeNo,
 						CaseMasterID: row.CaseMasterID,
@@ -533,7 +547,9 @@ module.exports = async (req, res) => {
 					const dbContext = citedRows.length
 						? `${dbResults.length} matching record(s) (status breakdown: ${statusLine}). Top cases:\n` +
 							citedRows.map(r => `- CrimeNo ${r.CrimeNo}: ${r.Crime_Type}, ${r.Status}`).join('\n')
-						: `No case records matched the query category "${plan.category}".`;
+						: categoryFiltered
+							? `No case records matched the query category "${plan.category}".`
+							: `The query did not map to a known crime category, so no case records were searched.`;
 
 					// Used when the model is too slow or fails — still a useful, grounded answer
 					const buildFallbackSummary = () =>
@@ -544,7 +560,7 @@ module.exports = async (req, res) => {
 
 					let finalSummary;
 					let summaryFromModel = false;
-					const remainingMs = SUMMARY_DEADLINE_MS - (Date.now() - circuitStart);
+					const remainingMs = SUMMARY_DEADLINE_MS - (Date.now() - requestStart);
 					try {
 						if (remainingMs < 3000) throw new Error(`only ${remainingMs}ms left before gateway timeout`);
 						console.log(`[SUMMARY NODE] Generating final synthesis (budget ${remainingMs}ms)...`);
@@ -814,3 +830,4 @@ module.exports = async (req, res) => {
 	}
 };
 module.exports.extractTranslation = extractTranslation;
+module.exports.fetchWithAuth = fetchWithAuth;
